@@ -18,6 +18,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
 
+fun stringBuildConfigLiteral(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 abstract class CopyRenamedApksTask : DefaultTask() {
 
     @get:InputDirectory
@@ -135,6 +137,38 @@ android {
         buildConfigField("String", "FrpsFileName", "\"libfrps.so\"")
         buildConfigField("String", "FrpcConfigFileName", "\"frpc.toml\"")
         buildConfigField("String", "FrpsConfigFileName", "\"frps.toml\"")
+
+        // 预置 FRPC 配置：用于打包出“安装后即有可编辑默认配置”的便捷版本。
+        // 注意：这里只做用户可见、可编辑的一键启动，不做隐藏、绕过用户感知的常驻或远控逻辑。
+        val presetFrpcEnabled =
+            providers.gradleProperty("PRESET_FRPC_ENABLED").orNull?.toBooleanStrictOrNull() ?: true
+        val presetFrpcFileName =
+            providers.gradleProperty("PRESET_FRPC_FILE_NAME").orNull ?: "preset-remote.toml"
+        val presetServerAddr = providers.gradleProperty("PRESET_FRP_SERVER_ADDR").orNull ?: ""
+        val presetServerPort = providers.gradleProperty("PRESET_FRP_SERVER_PORT").orNull ?: "7000"
+        val presetToken = providers.gradleProperty("PRESET_FRP_TOKEN").orNull ?: ""
+        val presetLocalIp = providers.gradleProperty("PRESET_FRP_LOCAL_IP").orNull ?: "127.0.0.1"
+        val presetLocalPort = providers.gradleProperty("PRESET_FRP_LOCAL_PORT").orNull ?: "7001"
+        val presetRemotePort = providers.gradleProperty("PRESET_FRP_REMOTE_PORT").orNull ?: "6000"
+        val presetLogLevel = providers.gradleProperty("PRESET_FRP_LOG_LEVEL").orNull ?: "info"
+        val presetAutoStartOnBoot =
+            providers.gradleProperty("PRESET_FRP_AUTO_START_ON_BOOT").orNull?.toBooleanStrictOrNull()
+                ?: true
+        val presetAutoStartOnLaunch =
+            providers.gradleProperty("PRESET_FRP_AUTO_START_ON_LAUNCH").orNull?.toBooleanStrictOrNull()
+                ?: true
+
+        buildConfigField("boolean", "PresetFrpcEnabled", presetFrpcEnabled.toString())
+        buildConfigField("String", "PresetFrpcFileName", stringBuildConfigLiteral(presetFrpcFileName))
+        buildConfigField("String", "PresetServerAddr", stringBuildConfigLiteral(presetServerAddr))
+        buildConfigField("int", "PresetServerPort", presetServerPort)
+        buildConfigField("String", "PresetToken", stringBuildConfigLiteral(presetToken))
+        buildConfigField("String", "PresetLocalIp", stringBuildConfigLiteral(presetLocalIp))
+        buildConfigField("int", "PresetLocalPort", presetLocalPort)
+        buildConfigField("int", "PresetRemotePort", presetRemotePort)
+        buildConfigField("String", "PresetLogLevel", stringBuildConfigLiteral(presetLogLevel))
+        buildConfigField("boolean", "PresetAutoStartOnBoot", presetAutoStartOnBoot.toString())
+        buildConfigField("boolean", "PresetAutoStartOnLaunch", presetAutoStartOnLaunch.toString())
     }
 
     buildTypes {

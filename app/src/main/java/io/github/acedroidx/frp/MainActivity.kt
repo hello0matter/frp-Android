@@ -209,6 +209,7 @@ class MainActivity : ComponentActivity() {
         themeMode.value = ThemeModeKeys.normalize(rawTheme)
 
         checkConfig()
+        PresetConfigHelper.ensureInitialized(this)
         configTemplates.value = getFrpConfigTemplates(this)
         updateConfigList()
         createBGNotificationChannel()
