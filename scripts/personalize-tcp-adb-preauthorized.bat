@@ -19,6 +19,9 @@ echo.
 echo Personalized script created:
 echo %SCRIPT%
 echo.
+echo This file can be copied to the rooted phone and executed directly.
+echo It can also be placed in /data/adb/service.d with owner root:root and mode 0700.
+echo.
 pause
 
 endlocal

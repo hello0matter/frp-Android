@@ -15,13 +15,16 @@ if not exist "%RENDERER%" (
     exit /b 1
 )
 
-for /f "usebackq delims=" %%I in (`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RENDERER%"`) do set "SCRIPT=%%I"
+for /f "usebackq delims=" %%I in (`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RENDERER%" -OutputDirectory "%TEMP%\frp-android-adb-scripts"`) do set "SCRIPT=%%I"
 if not defined SCRIPT (
     echo Failed to generate a personalized shell script.
     exit /b 1
 )
 
-for %%F in ("%SCRIPT%") do set "REMOTE=/data/local/tmp/%%~nxF"
+for %%F in ("%SCRIPT%") do (
+    set "REMOTE=/data/local/tmp/%%~nxF"
+    set "SERVICE=/data/adb/service.d/%%~nxF"
+)
 echo Generated: %SCRIPT%
 
 adb push "%SCRIPT%" "%REMOTE%"
@@ -32,7 +35,7 @@ adb shell su -c "sh %REMOTE%"
 
 echo.
 echo Installation command completed. adbd may disconnect briefly while restarting.
-echo Boot script: /data/adb/service.d/99-tcp-adb.sh
+echo Boot script: %SERVICE%
 echo Log: /data/adb/tcp-adb-preauthorized.log
 
 endlocal

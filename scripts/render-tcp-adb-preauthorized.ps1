@@ -10,7 +10,7 @@ if ([string]::IsNullOrWhiteSpace($TemplatePath)) {
     $TemplatePath = Join-Path $PSScriptRoot '99-tcp-adb-preauthorized.sh'
 }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $OutputDirectory = Join-Path $env:TEMP 'frp-android-adb-scripts'
+    $OutputDirectory = Join-Path $PSScriptRoot 'personalized'
 }
 
 $publicKeyPath = Join-Path $env:USERPROFILE '.android\adbkey.pub'
@@ -49,7 +49,7 @@ try {
             $adjectives[$randomBytes[0] % $adjectives.Count],
             $nouns[$randomBytes[1] % $nouns.Count]
         )
-        $outputPath = Join-Path $OutputDirectory "99-tcp-adb-preauthorized-$installName.sh"
+        $outputPath = Join-Path $OutputDirectory "$installName.sh"
     } while (Test-Path -LiteralPath $outputPath)
 } finally {
     $randomNumberGenerator.Dispose()

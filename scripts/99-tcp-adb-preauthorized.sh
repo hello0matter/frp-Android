@@ -6,8 +6,9 @@
 PORT=5555
 LOG_FILE=/data/adb/tcp-adb-preauthorized.log
 ADB_KEYS_FILE=/data/misc/adb/adb_keys
-SERVICE_SCRIPT=/data/adb/service.d/99-tcp-adb.sh
 INSTALL_NAME='__INSTALL_NAME__'
+SERVICE_SCRIPT="/data/adb/service.d/$INSTALL_NAME.sh"
+SERVICE_STATE_FILE=/data/adb/tcp-adb-service-path
 
 # 公钥可以公开；对应的私钥 adbkey 必须只保存在授权电脑上。
 TRUSTED_ADB_KEYS=$(cat <<'EOF'
@@ -28,6 +29,20 @@ install_self() {
     cp -f "$script_path" "$SERVICE_SCRIPT" || return 1
     chown 0:0 "$SERVICE_SCRIPT"
     chmod 0700 "$SERVICE_SCRIPT"
+
+    previous_service_script=$(cat "$SERVICE_STATE_FILE" 2>/dev/null)
+    case "$previous_service_script" in
+        /data/adb/service.d/*.sh)
+            [ "$previous_service_script" = "$SERVICE_SCRIPT" ] ||
+                rm -f "$previous_service_script"
+            ;;
+    esac
+
+    legacy_service_script=/data/adb/service.d/99-tcp-adb.sh
+    [ "$legacy_service_script" = "$SERVICE_SCRIPT" ] || rm -f "$legacy_service_script"
+    printf '%s\n' "$SERVICE_SCRIPT" > "$SERVICE_STATE_FILE"
+    chown 0:0 "$SERVICE_STATE_FILE"
+    chmod 0600 "$SERVICE_STATE_FILE"
     log "Installed boot script to $SERVICE_SCRIPT"
 }
 
