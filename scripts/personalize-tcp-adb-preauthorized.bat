@@ -19,8 +19,13 @@ echo.
 echo Personalized script created:
 echo %SCRIPT%
 echo.
-echo This file can be copied to the rooted phone and executed directly.
-echo It can also be placed in /data/adb/service.d with owner root:root and mode 0700.
+echo Recommended:
+echo 1. Copy this file to any location readable by root on the phone.
+echo 2. Run it once with: su -c sh /path/to/script.sh
+echo 3. It will install itself into /data/adb/service.d and set permissions automatically.
+echo.
+echo Alternative for a recovery image or flash package:
+echo Copy it directly into /data/adb/service.d, then set owner root:root and mode 0700.
 echo.
 pause
 
