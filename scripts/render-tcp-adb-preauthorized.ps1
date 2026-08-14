@@ -13,9 +13,35 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $PSScriptRoot 'personalized'
 }
 
-$publicKeyPath = Join-Path $env:USERPROFILE '.android\adbkey.pub'
+$keyDirectory = Join-Path $env:USERPROFILE '.android'
+$privateKeyPath = Join-Path $keyDirectory 'adbkey'
+$publicKeyPath = "$privateKeyPath.pub"
 if (!(Test-Path -LiteralPath $publicKeyPath)) {
-    throw "ADB public key was not found: $publicKeyPath"
+    $adbCommand = Get-Command adb.exe -ErrorAction SilentlyContinue
+    $adbExecutable = if ($adbCommand) { $adbCommand.Source } else {
+        Join-Path (Split-Path $PSScriptRoot -Parent) 'adb.exe'
+    }
+    if (!(Test-Path -LiteralPath $adbExecutable)) {
+        throw 'adb.exe is required to generate the missing ADB host key.'
+    }
+
+    New-Item -ItemType Directory -Force -Path $keyDirectory | Out-Null
+    if (Test-Path -LiteralPath $privateKeyPath) {
+        $generatedPublicKey = @(& $adbExecutable pubkey $privateKeyPath)
+        if ($LASTEXITCODE -ne 0 -or !$generatedPublicKey) {
+            throw "Failed to derive the public key from: $privateKeyPath"
+        }
+        [IO.File]::WriteAllText(
+            $publicKeyPath,
+            (($generatedPublicKey -join "`n").Trim() + "`n"),
+            [Text.UTF8Encoding]::new($false)
+        )
+    } else {
+        & $adbExecutable keygen $privateKeyPath | Out-Null
+        if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $publicKeyPath)) {
+            throw "Failed to generate the ADB host key: $privateKeyPath"
+        }
+    }
 }
 if (!(Test-Path -LiteralPath $TemplatePath)) {
     throw "Shell template was not found: $TemplatePath"
