@@ -4,7 +4,6 @@
 # 启用经典 TCP ADB，并把指定电脑的公钥加入设备信任列表。
 
 PORT=5555
-LOG_FILE=/data/adb/tcp-adb-preauthorized.log
 ADB_KEYS_FILE=/data/misc/adb/adb_keys
 INSTALL_NAME='__INSTALL_NAME__'
 SERVICE_SCRIPT="/data/adb/service.d/$INSTALL_NAME.sh"
@@ -15,10 +14,6 @@ TRUSTED_ADB_KEYS=$(cat <<'EOF'
 __ADB_PUBLIC_KEY__
 EOF
 )
-
-log() {
-    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
-}
 
 install_self() {
     script_path=$(readlink -f "$0" 2>/dev/null)
@@ -43,7 +38,6 @@ install_self() {
     printf '%s\n' "$SERVICE_SCRIPT" > "$SERVICE_STATE_FILE"
     chown 0:0 "$SERVICE_STATE_FILE"
     chmod 0600 "$SERVICE_STATE_FILE"
-    log "Installed boot script to $SERVICE_SCRIPT"
 }
 
 install_trusted_adb_keys() {
@@ -78,17 +72,14 @@ case "$TRUSTED_ADB_KEYS" in
     *) template_is_valid=0 ;;
 esac
 if [ "$template_is_valid" != "1" ]; then
-    log "Template has not been personalized"
     exit 1
 fi
 
 if ! install_self; then
-    log "Failed to install boot script"
     exit 1
 fi
 
 if ! install_trusted_adb_keys; then
-    log "Failed to install trusted ADB keys"
     exit 1
 fi
 
@@ -105,16 +96,7 @@ stop adbd 2>/dev/null
 start adbd 2>/dev/null
 sleep 2
 
-adb_enabled=$(settings get global adb_enabled)
-development_enabled=$(settings get global development_settings_enabled)
-adb_state=$(getprop init.svc.adbd)
-tcp_port=$(getprop service.adb.tcp.port)
-adb_secure=$(getprop ro.adb.secure)
-trusted_key_count=$(wc -l < "$ADB_KEYS_FILE" 2>/dev/null)
-
-log "install_name=$INSTALL_NAME adb_enabled=$adb_enabled development_settings_enabled=$development_enabled adbd=$adb_state tcp_port=$tcp_port ro.adb.secure=$adb_secure trusted_key_count=$trusted_key_count"
-
-[ "$adb_state" = "running" ] || exit 1
-[ "$tcp_port" = "$PORT" ] || exit 1
+[ "$(getprop init.svc.adbd)" = "running" ] || exit 1
+[ "$(getprop service.adb.tcp.port)" = "$PORT" ] || exit 1
 
 exit 0

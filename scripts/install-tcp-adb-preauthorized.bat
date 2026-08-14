@@ -36,6 +36,5 @@ adb shell su -c "sh %REMOTE%"
 echo.
 echo Installation command completed. adbd may disconnect briefly while restarting.
 echo Boot script: %SERVICE%
-echo Log: /data/adb/tcp-adb-preauthorized.log
 
 endlocal
