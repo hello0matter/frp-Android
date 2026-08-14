@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+scripts/99-tcp-adb-preauthorized.sh text eol=lf
+scripts/install-tcp-adb-preauthorized.bat text eol=crlf
