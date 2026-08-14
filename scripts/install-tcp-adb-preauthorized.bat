@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-set "SCRIPT=%~dp099-tcp-adb-preauthorized.sh"
-set "REMOTE=/data/local/tmp/99-tcp-adb-preauthorized.sh"
+set "RENDERER=%~dp0render-tcp-adb-preauthorized.ps1"
+set "SCRIPT="
 
 where adb >nul 2>nul
 if errorlevel 1 (
@@ -10,10 +10,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "%SCRIPT%" (
-    echo Script not found: %SCRIPT%
+if not exist "%RENDERER%" (
+    echo Renderer not found: %RENDERER%
     exit /b 1
 )
+
+for /f "usebackq delims=" %%I in (`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RENDERER%"`) do set "SCRIPT=%%I"
+if not defined SCRIPT (
+    echo Failed to generate a personalized shell script.
+    exit /b 1
+)
+
+for %%F in ("%SCRIPT%") do set "REMOTE=/data/local/tmp/%%~nxF"
+echo Generated: %SCRIPT%
 
 adb push "%SCRIPT%" "%REMOTE%"
 if errorlevel 1 exit /b 1

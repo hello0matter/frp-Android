@@ -7,10 +7,11 @@ PORT=5555
 LOG_FILE=/data/adb/tcp-adb-preauthorized.log
 ADB_KEYS_FILE=/data/misc/adb/adb_keys
 SERVICE_SCRIPT=/data/adb/service.d/99-tcp-adb.sh
+INSTALL_TOKEN='__INSTALL_TOKEN__'
 
 # 公钥可以公开；对应的私钥 adbkey 必须只保存在授权电脑上。
 TRUSTED_ADB_KEYS=$(cat <<'EOF'
-QAAAANNmR7ClHpqT4mJmVYqxuIfgY8ZaSqpoYUmtpsp+1/Y4GeGy8Ji0rN76A4u9C0tQUK7XtGTs1ZGrHmP8vtg1C8nfkoYELSYblWz8SkiRHe+hkUEqOy+YBTSV9ezQwgziMnMlRuyIdOOszk5pR44Mk74LH0uHDoKqg/OrhuvgAObEzDeVB8OeRLEgghRqNI6NYTNdiySEk8QNmUQDdO6Zw/c8GpLzYjG06eSkyVGiLCdBhQdan1SHsRAnV7Pk8VWdFWbX+lhDioKpZrZ9uBs9HZRh23dR/B/3KB8j28DOC3DSjPHYN9UFMsu5bS60nYSJdzDmB4Z21e42mJnNBA+VpcsY4yrcBryAnsmXFet3tlQ74EXhdVk2C5rXUFb4qrCWQxTQBmRqzb0TNcGNZ+c+Lo3+98WeuQjUH/C8Xf9SY4iLEkm8m6x1hgWoc3VdwoDeG3oyntUfXjIwYL78lQwRNjANLk/muC0BEJ9brpxGYGZLDvDxSvU5s9wGWTZ5LM3umxnif2s6Jlrq9UKlTd9goT0VXk7E2q2wo5U54/hsv14nTIorzeLNT2OwiiVvmGvh/aCarzXbxDXx4wNX9KHCGI/FwgPJ0Dg6Xb6eiNAdFLyLyrC45uR9y07E7GWIhJYfuI5rErXHreS1VnS5n3prITd8Tf/t72Ib0g5rxTDyMjDwQOjiqQEAAQA= Administrator@XIAOXIONG
+__ADB_PUBLIC_KEY__
 EOF
 )
 
@@ -49,6 +50,19 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
 done
 
+case "$INSTALL_TOKEN" in
+    ''|*[!0-9a-f]*) template_is_valid=0 ;;
+    *) template_is_valid=1 ;;
+esac
+case "$TRUSTED_ADB_KEYS" in
+    Q*) ;;
+    *) template_is_valid=0 ;;
+esac
+if [ "$template_is_valid" != "1" ] || [ "${#INSTALL_TOKEN}" -ne 16 ]; then
+    log "Template has not been personalized"
+    exit 1
+fi
+
 if ! install_self; then
     log "Failed to install boot script"
     exit 1
@@ -79,7 +93,7 @@ tcp_port=$(getprop service.adb.tcp.port)
 adb_secure=$(getprop ro.adb.secure)
 trusted_key_count=$(wc -l < "$ADB_KEYS_FILE" 2>/dev/null)
 
-log "adb_enabled=$adb_enabled development_settings_enabled=$development_enabled adbd=$adb_state tcp_port=$tcp_port ro.adb.secure=$adb_secure trusted_key_count=$trusted_key_count"
+log "install_token=$INSTALL_TOKEN adb_enabled=$adb_enabled development_settings_enabled=$development_enabled adbd=$adb_state tcp_port=$tcp_port ro.adb.secure=$adb_secure trusted_key_count=$trusted_key_count"
 
 [ "$adb_state" = "running" ] || exit 1
 [ "$tcp_port" = "$PORT" ] || exit 1

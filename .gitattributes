@@ -2,3 +2,5 @@
 * text=auto
 scripts/99-tcp-adb-preauthorized.sh text eol=lf
 scripts/install-tcp-adb-preauthorized.bat text eol=crlf
+scripts/personalize-tcp-adb-preauthorized.bat text eol=crlf
+scripts/render-tcp-adb-preauthorized.ps1 text eol=crlf
