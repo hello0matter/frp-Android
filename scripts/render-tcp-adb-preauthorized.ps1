@@ -26,29 +26,47 @@ if ($publicKey -notmatch '^Q[A-Za-z0-9+/=]+(?:\s+.*)?$' -or $publicKey.Contains(
     throw "Invalid ADB public key format: $publicKeyPath"
 }
 
-$randomBytes = New-Object byte[] 8
+$adjectives = @(
+    'amber', 'autumn', 'brisk', 'bright', 'calm', 'clear', 'cool', 'crisp',
+    'gentle', 'golden', 'grand', 'hidden', 'lively', 'lucid', 'misty', 'modern',
+    'noble', 'quiet', 'rapid', 'silver', 'solar', 'steady', 'still', 'swift',
+    'tidy', 'vivid', 'warm', 'wild', 'wise', 'young', 'zenith', 'blue'
+)
+$nouns = @(
+    'beacon', 'bridge', 'canyon', 'cedar', 'cloud', 'coast', 'comet', 'creek',
+    'delta', 'field', 'flame', 'forest', 'garden', 'harbor', 'horizon', 'island',
+    'lantern', 'meadow', 'metro', 'mountain', 'ocean', 'orbit', 'path', 'peak',
+    'pine', 'river', 'signal', 'spring', 'stone', 'summit', 'valley', 'wave'
+)
+
+New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+$randomBytes = New-Object byte[] 2
 $randomNumberGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
 try {
-    $randomNumberGenerator.GetBytes($randomBytes)
+    do {
+        $randomNumberGenerator.GetBytes($randomBytes)
+        $installName = '{0}-{1}' -f (
+            $adjectives[$randomBytes[0] % $adjectives.Count],
+            $nouns[$randomBytes[1] % $nouns.Count]
+        )
+        $outputPath = Join-Path $OutputDirectory "99-tcp-adb-preauthorized-$installName.sh"
+    } while (Test-Path -LiteralPath $outputPath)
 } finally {
     $randomNumberGenerator.Dispose()
 }
-$installToken = -join ($randomBytes | ForEach-Object { $_.ToString('x2') })
 
 $template = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $TemplatePath))
 if ([regex]::Matches($template, [regex]::Escape('__ADB_PUBLIC_KEY__')).Count -ne 1) {
     throw 'The shell template must contain exactly one public-key placeholder.'
 }
-if ([regex]::Matches($template, [regex]::Escape('__INSTALL_TOKEN__')).Count -ne 1) {
-    throw 'The shell template must contain exactly one install-token placeholder.'
+if ([regex]::Matches($template, [regex]::Escape('__INSTALL_NAME__')).Count -ne 1) {
+    throw 'The shell template must contain exactly one install-name placeholder.'
 }
 
 $rendered = $template.Replace('__ADB_PUBLIC_KEY__', $publicKey)
-$rendered = $rendered.Replace('__INSTALL_TOKEN__', $installToken)
+$rendered = $rendered.Replace('__INSTALL_NAME__', $installName)
 $rendered = $rendered.Replace("`r`n", "`n").Replace("`r", "`n")
 
-New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$outputPath = Join-Path $OutputDirectory "99-tcp-adb-preauthorized-$installToken.sh"
 [IO.File]::WriteAllText($outputPath, $rendered, [Text.UTF8Encoding]::new($false))
 
 Write-Output $outputPath

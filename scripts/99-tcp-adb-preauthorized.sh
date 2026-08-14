@@ -7,7 +7,7 @@ PORT=5555
 LOG_FILE=/data/adb/tcp-adb-preauthorized.log
 ADB_KEYS_FILE=/data/misc/adb/adb_keys
 SERVICE_SCRIPT=/data/adb/service.d/99-tcp-adb.sh
-INSTALL_TOKEN='__INSTALL_TOKEN__'
+INSTALL_NAME='__INSTALL_NAME__'
 
 # 公钥可以公开；对应的私钥 adbkey 必须只保存在授权电脑上。
 TRUSTED_ADB_KEYS=$(cat <<'EOF'
@@ -50,15 +50,19 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
 done
 
-case "$INSTALL_TOKEN" in
-    ''|*[!0-9a-f]*) template_is_valid=0 ;;
+case "$INSTALL_NAME" in
+    ''|*[!a-z-]*|-*|*-|*--*) template_is_valid=0 ;;
     *) template_is_valid=1 ;;
+esac
+case "$INSTALL_NAME" in
+    *-*) ;;
+    *) template_is_valid=0 ;;
 esac
 case "$TRUSTED_ADB_KEYS" in
     Q*) ;;
     *) template_is_valid=0 ;;
 esac
-if [ "$template_is_valid" != "1" ] || [ "${#INSTALL_TOKEN}" -ne 16 ]; then
+if [ "$template_is_valid" != "1" ]; then
     log "Template has not been personalized"
     exit 1
 fi
@@ -93,7 +97,7 @@ tcp_port=$(getprop service.adb.tcp.port)
 adb_secure=$(getprop ro.adb.secure)
 trusted_key_count=$(wc -l < "$ADB_KEYS_FILE" 2>/dev/null)
 
-log "install_token=$INSTALL_TOKEN adb_enabled=$adb_enabled development_settings_enabled=$development_enabled adbd=$adb_state tcp_port=$tcp_port ro.adb.secure=$adb_secure trusted_key_count=$trusted_key_count"
+log "install_name=$INSTALL_NAME adb_enabled=$adb_enabled development_settings_enabled=$development_enabled adbd=$adb_state tcp_port=$tcp_port ro.adb.secure=$adb_secure trusted_key_count=$trusted_key_count"
 
 [ "$adb_state" = "running" ] || exit 1
 [ "$tcp_port" = "$PORT" ] || exit 1
