@@ -26,7 +26,7 @@ PROFILE_DIR = ROOT / "profiles"
 ACTIVE_PROFILE = PROFILE_DIR / "active.json"
 MANAGER_SETTINGS = PROFILE_DIR / "manager-settings.json"
 DEFAULTS = {
-    "profileName": "default",
+    "profileName": "new-profile",
     "serverAddr": "39.107.228.222",
     "serverPort": 7000,
     "localPort": 5555,
@@ -259,7 +259,7 @@ class App(tk.Tk):
         self.geometry("1080x720")
         self.minsize(900, 600)
         self.profiles: dict[str, dict] = {}
-        self.selected_profile = "default"
+        self.selected_profile = "new-profile"
         self.devices: list[Device] = []
         self.visible_devices: list[Device] = []
         self.output_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -271,9 +271,12 @@ class App(tk.Tk):
         self.vars = {key: tk.StringVar(value=str(value)) for key, value in DEFAULTS.items()}
         self.adb_var = tk.BooleanVar(value=True)
         self.log_var = tk.BooleanVar(value=True)
+        self.frpc_installed_var = tk.BooleanVar(value=False)
         self.target_var = tk.StringVar(value="未选择设备")
         self.service_state_var = tk.StringVar(value="FRPC: 未知    ADB 开机恢复: 未知")
         self.status_var = tk.StringVar(value="就绪")
+        self.current_installed: dict = {}
+        self.current_installed_serial = ""
         self.build_ui()
         self.load_profiles()
         self.request_device_refresh()
@@ -347,6 +350,7 @@ class App(tk.Tk):
         right.grid(row=1, column=1, sticky="nsew")
         right.columnconfigure(1, weight=1)
         right.rowconfigure(11, weight=1)
+        self.editor_widgets: list[tk.Widget] = []
         fields = [("设备归档名称", "profileName"), ("服务器地址", "serverAddr"), ("服务器端口", "serverPort"),
                   ("本地端口", "localPort"), ("远程端口", "remotePort"), ("Token", "token"),
                   ("Root 数据目录", "installBase")]
@@ -356,15 +360,29 @@ class App(tk.Tk):
                 name_frame = ttk.Frame(right)
                 name_frame.grid(row=row, column=1, sticky="ew", pady=5)
                 name_frame.columnconfigure(0, weight=1)
-                ttk.Entry(name_frame, textvariable=self.vars[key]).grid(row=0, column=0, sticky="ew")
-                ttk.Button(name_frame, text="自动命名", command=self.auto_name_archive).grid(row=0, column=1, padx=(6, 0))
+                entry = ttk.Entry(name_frame, textvariable=self.vars[key])
+                entry.grid(row=0, column=0, sticky="ew")
+                auto_name = ttk.Button(name_frame, text="自动命名", command=self.auto_name_archive)
+                auto_name.grid(row=0, column=1, padx=(6, 0))
+                self.editor_widgets.extend((entry, auto_name))
             else:
                 entry = ttk.Entry(right, textvariable=self.vars[key], show="*" if key == "token" else "")
                 entry.grid(row=row, column=1, sticky="ew", pady=5)
+                self.editor_widgets.append(entry)
         options = ttk.Frame(right)
         options.grid(row=7, column=1, sticky="w", pady=5)
-        ttk.Checkbutton(options, text="包含 ADB 开机恢复脚本", variable=self.adb_var).pack(side="left")
-        ttk.Checkbutton(options, text="启用 FRPC 日志", variable=self.log_var).pack(side="left", padx=(20, 0))
+        frpc_installed = ttk.Checkbutton(
+            options,
+            text="FRPC 已安装",
+            variable=self.frpc_installed_var,
+            state="disabled",
+        )
+        frpc_installed.pack(side="left")
+        adb_check = ttk.Checkbutton(options, text="包含 ADB 开机恢复脚本", variable=self.adb_var)
+        adb_check.pack(side="left", padx=(20, 0))
+        log_check = ttk.Checkbutton(options, text="启用 FRPC 日志", variable=self.log_var)
+        log_check.pack(side="left", padx=(20, 0))
+        self.editor_widgets.extend((adb_check, log_check))
         ttk.Label(right, text="目标设备").grid(row=8, column=0, sticky="w", padx=(0, 10), pady=5)
         ttk.Label(right, textvariable=self.target_var).grid(row=8, column=1, sticky="w", pady=5)
 
@@ -375,13 +393,8 @@ class App(tk.Tk):
         action_specs = (
             ("save", "保存归档", self.save_profile),
             ("clone", "复制归档", self.clone_profile),
-            ("install_frpc", "安装 FRPC", self.install_frpc_only),
-            ("install_adb", "安装 ADB", self.install_adb_only),
-            ("start_frpc", "启动 FRPC", lambda: self.service_action("start")),
-            ("stop_frpc", "停止 FRPC", lambda: self.service_action("stop")),
-            ("restart_frpc", "重启 FRPC", lambda: self.service_action("restart")),
-            ("uninstall_frpc", "卸载 FRPC", lambda: self.service_action("uninstall")),
-            ("uninstall_adb", "卸载 ADB", self.uninstall_adb),
+            ("history", "归档历史", self.show_profile_history),
+            ("online_ops", "在线操作...", self.show_online_operations),
         )
         for key, label, callback in action_specs:
             button = ttk.Button(actions, text=label, command=callback)
@@ -397,12 +410,16 @@ class App(tk.Tk):
     def load_profiles(self) -> None:
         self.profiles = {path.stem: normalize_profile(load_json(path), path.stem) for path in profile_files()}
         active_data = load_json(ACTIVE_PROFILE)
-        active_name = str(active_data.get("profileName", "default")) if active_data else "default"
+        active_name = str(active_data.get("profileName", "")) if active_data else ""
         if not NAME_RE.fullmatch(active_name):
-            active_name = "default"
-        if active_data:
+            active_name = ""
+        if active_data and active_name:
             self.profiles[active_name] = normalize_profile(active_data, active_name)
-        self.profiles.setdefault("default", normalize_profile({}, "default"))
+        if not self.profiles:
+            active_name = "new-profile"
+            self.profiles[active_name] = normalize_profile({}, active_name)
+        elif active_name not in self.profiles:
+            active_name = next(iter(sorted(self.profiles)))
         self.refresh_profile_list()
         self.load_profile(active_name)
 
@@ -537,9 +554,6 @@ class App(tk.Tk):
             if kind != "本地设备归档":
                 messagebox.showinfo("删除归档", "在线 ADB 设备是实时记录，不能删除。", parent=dialog)
                 return
-            if value == "default":
-                messagebox.showinfo("删除归档", "默认设备归档不能删除。", parent=dialog)
-                return
             if not messagebox.askyesno("确认删除", f"删除设备归档 {value}？", parent=dialog):
                 return
             self.selected_profile = value
@@ -625,7 +639,7 @@ class App(tk.Tk):
         if self.selected_profile in names:
             self.profile_list.selection_set(names.index(self.selected_profile))
 
-    def load_profile(self, name: str) -> None:
+    def load_profile(self, name: str, refresh_online: bool = True) -> None:
         self.selection_context = "archive"
         self.selected_profile = name
         profile = normalize_profile(self.profiles.get(name, {}), name)
@@ -634,9 +648,19 @@ class App(tk.Tk):
                 self.vars[key].set(str(profile.get(key, DEFAULTS[key])))
         self.adb_var.set(bool(profile.get("includeAdbBootstrap", True)))
         self.log_var.set(bool(profile.get("enableFrpcLog", True)))
+        self.frpc_installed_var.set(bool(profile.get("lastFrpcInstalled", False)))
         self.locate_profile(name)
+        self.set_editor_enabled(True)
         self.update_action_states()
         self.set_status(f"已加载本机配置: {name}")
+        serial = self.vars["serial"].get().strip()
+        if refresh_online and serial and any(device.serial == serial for device in self.devices):
+            self.after(0, lambda: self.request_selected_device_config(announce=True))
+
+    def set_editor_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for widget in self.editor_widgets:
+            widget.configure(state=state)
 
     def update_action_states(self, installed: dict | None = None) -> None:
         if not hasattr(self, "action_buttons"):
@@ -644,19 +668,16 @@ class App(tk.Tk):
         enabled: set[str]
         if self.selection_context == "archive":
             # 归档代表待部署的 FRPC 配置；设备上的运行控制要等选择在线设备后再启用。
-            enabled = {"save", "clone", "install_frpc"}
+            enabled = {"save", "clone", "history"}
+            serial = self.vars["serial"].get().strip()
+            if serial and any(device.serial == serial for device in self.devices):
+                enabled.add("online_ops")
         else:
             installed = installed or {}
+            self.current_installed = installed
+            self.current_installed_serial = self.vars["serial"].get().strip()
             enabled = set()
-            # 在线设备未安装 FRPC 时允许直接重新安装；设备端脚本会负责清理旧残留。
-            if not installed.get("frpcInstalled"):
-                enabled.add("install_frpc")
-            if not installed.get("adbInstalled"):
-                enabled.add("install_adb")
-            if installed.get("frpcInstalled"):
-                enabled.update({"start_frpc", "stop_frpc", "restart_frpc", "uninstall_frpc"})
-            if installed.get("adbInstalled"):
-                enabled.add("uninstall_adb")
+            enabled.add("online_ops")
         for key, button in self.action_buttons.items():
             button.configure(state="normal" if key in enabled else "disabled")
 
@@ -682,12 +703,19 @@ class App(tk.Tk):
             self.show_profile_details()
 
     def new_profile(self) -> None:
+        target_serial = self.vars["serial"].get().strip() if self.selection_context == "device" else ""
+        target_unique_id = self.vars["deviceUniqueId"].get().strip() if target_serial else ""
+        target_brand_model = self.vars["deviceBrandModel"].get().strip() if target_serial else ""
         name = "new-profile"
         index = 2
         while name in self.profiles:
             name = f"new-profile-{index}"
             index += 1
-        self.profiles[name] = normalize_profile({}, name)
+        self.profiles[name] = normalize_profile({
+            "serial": target_serial,
+            "deviceUniqueId": target_unique_id,
+            "deviceBrandModel": target_brand_model,
+        }, name)
         self.refresh_profile_list()
         self.load_profile(name)
         self.set_status(f"已新建未保存配置: {name}")
@@ -776,6 +804,16 @@ class App(tk.Tk):
         if name != self.selected_profile and name in self.profiles:
             messagebox.showerror("归档错误", f"设备归档 {name} 已存在，请换一个名称。")
             return False
+        serial = self.vars["serial"].get().strip()
+        online = {device.serial for device in self.devices}
+        old_profile = self.profiles.get(self.selected_profile, {})
+        matched_online = bool(serial and serial in online and str(old_profile.get("serial", serial)) == serial)
+        if not matched_online:
+            if not messagebox.askyesno(
+                "保存为挂起归档",
+                "当前归档没有匹配的在线 ADB 设备，将保存为未联线状态。是否继续？",
+            ):
+                return False
         try:
             profile = dict(self.profiles.get(self.selected_profile, {}))
             profile.update({
@@ -795,10 +833,27 @@ class App(tk.Tk):
         profile["includeAdbBootstrap"] = self.adb_var.get()
         profile["enableFrpcLog"] = self.log_var.get()
         profile.setdefault("createdAt", now_text())
+        history = list(profile.get("saveHistory", []))
+        snapshot = {
+            key: profile.get(key)
+            for key in (
+                *(key for key in DEFAULTS if key != "token"), "createdAt", "firstInstalledAt",
+                "firstInstalledSerial", "firstInstalledDeviceInfo",
+            )
+        }
+        history.append({
+            "savedAt": now_text(),
+            "connected": matched_online,
+            "serial": serial,
+            "deviceUniqueId": profile.get("deviceUniqueId", ""),
+            "deviceBrandModel": profile.get("deviceBrandModel", ""),
+            "snapshot": snapshot,
+        })
+        profile["saveHistory"] = history[-50:]
         profile["updatedAt"] = now_text()
         old_name = self.selected_profile
         self.profiles[name] = normalize_profile(profile, name)
-        if old_name != name and old_name != "default":
+        if old_name != name:
             (PROFILE_DIR / f"{old_name}.json").unlink(missing_ok=True)
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         data = json.dumps(self.profiles[name], ensure_ascii=False, indent=2) + "\n"
@@ -810,16 +865,113 @@ class App(tk.Tk):
         self.set_status(f"设备归档已保存并设为当前: {name}")
         return True
 
+    def show_profile_history(self) -> None:
+        profile = normalize_profile(self.profiles.get(self.selected_profile, {}), self.selected_profile)
+        history = profile.get("saveHistory", [])
+        dialog = tk.Toplevel(self)
+        dialog.title(f"归档历史 - {self.selected_profile}")
+        dialog.geometry("820x460")
+        dialog.transient(self)
+        frame = ttk.Frame(dialog, padding=10)
+        frame.pack(fill="both", expand=True)
+        tree = ttk.Treeview(frame, columns=("time", "state", "device"), show="headings", selectmode="browse")
+        tree.heading("time", text="保存时间")
+        tree.heading("state", text="状态")
+        tree.heading("device", text="设备")
+        tree.column("time", width=190, stretch=False)
+        tree.column("state", width=130, stretch=False)
+        tree.column("device", width=420)
+        tree.pack(fill="both", expand=True)
+        reversed_history = list(reversed(history))
+        for index, item in enumerate(reversed_history):
+            tree.insert("", "end", iid=str(index), values=(
+                item.get("savedAt", "未记录"),
+                "已联线" if item.get("connected") else "挂起 / 未联线",
+                " | ".join(filter(None, (item.get("serial", ""), item.get("deviceBrandModel", "")))) or "未记录",
+            ))
+        actions = ttk.Frame(frame)
+        actions.pack(fill="x", pady=(10, 0))
+
+        def rollback() -> None:
+            selected = tree.selection()
+            if not selected:
+                messagebox.showinfo("回撤归档", "请先选择一条保存记录。", parent=dialog)
+                return
+            item = reversed_history[int(selected[0])]
+            snapshot = item.get("snapshot")
+            if not isinstance(snapshot, dict):
+                messagebox.showinfo("回撤归档", "这条旧记录没有完整配置快照，不能回撤。", parent=dialog)
+                return
+            if not messagebox.askyesno("确认回撤", f"回撤到 {item.get('savedAt', '该时间')} 的配置？", parent=dialog):
+                return
+            restored = dict(profile)
+            restored.update(snapshot)
+            restored["saveHistory"] = history
+            restored["updatedAt"] = now_text()
+            self.profiles[self.selected_profile] = normalize_profile(restored, self.selected_profile)
+            self.persist_profile(self.selected_profile)
+            self.load_profile(self.selected_profile)
+            self.append_output(f"已回撤设备归档 {self.selected_profile} 到: {item.get('savedAt', '未记录')}")
+            dialog.destroy()
+
+        ttk.Button(actions, text="回撤到所选记录", command=rollback).pack(side="left")
+        ttk.Button(actions, text="关闭", command=dialog.destroy).pack(side="right")
+
+    def show_online_operations(self) -> None:
+        serial = self.vars["serial"].get().strip()
+        if not serial or not any(device.serial == serial for device in self.devices):
+            messagebox.showinfo("在线操作", "请先在左下方选择在线 ADB 设备。")
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title(f"在线操作 - {serial}")
+        dialog.transient(self)
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="FRPC 操作", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        frpc = ttk.Frame(body)
+        frpc.pack(fill="x", pady=(6, 14))
+        ttk.Label(body, text="ADB 开机恢复操作", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        adb_frame = ttk.Frame(body)
+        adb_frame.pack(fill="x", pady=(6, 10))
+        installed = self.current_installed if self.current_installed_serial == serial else {}
+        status_known = self.current_installed_serial == serial
+        buttons: list[ttk.Button] = []
+
+        def add_button(parent, label, command, enabled=True):
+            button = ttk.Button(parent, text=label, command=lambda: (dialog.destroy(), command()))
+            button.pack(side="left", padx=(0, 6))
+            button.configure(state="normal" if enabled else "disabled")
+            buttons.append(button)
+
+        add_button(frpc, "推送 FRPC 配置", self.push_saved_frpc_profile, True)
+        add_button(frpc, "启动", lambda: self.service_action("start"), status_known and bool(installed.get("frpcInstalled")))
+        add_button(frpc, "停止", lambda: self.service_action("stop"), status_known and bool(installed.get("frpcInstalled")))
+        add_button(frpc, "重启", lambda: self.service_action("restart"), status_known and bool(installed.get("frpcInstalled")))
+        add_button(frpc, "卸载", lambda: self.service_action("uninstall"), status_known and bool(installed.get("frpcInstalled")))
+        add_button(adb_frame, "安装 ADB", lambda: self.install_adb_only(save_before=False), status_known and not installed.get("adbInstalled"))
+        add_button(adb_frame, "卸载 ADB", self.uninstall_adb, status_known and bool(installed.get("adbInstalled")))
+        ttk.Label(
+            body,
+            text="推送配置会由手机端脚本清理旧 FRPC 服务后重新安装。ADB 卸载只删除开机恢复脚本，不会停止当前 adbd。",
+            foreground="#666666",
+            wraplength=560,
+        ).pack(anchor="w", pady=(4, 8))
+        ttk.Button(body, text="关闭", command=dialog.destroy).pack(anchor="e")
+
     def delete_profile(self) -> None:
         name = self.selected_profile
-        if name == "default":
-            messagebox.showinfo("提示", "默认配置不能删除。")
-            return
         if not messagebox.askyesno("确认删除", f"删除配置 {name}？"):
             return
         self.profiles.pop(name, None)
         (PROFILE_DIR / f"{name}.json").unlink(missing_ok=True)
-        self.load_profile("default")
+        if self.profiles:
+            self.load_profile(next(iter(sorted(self.profiles))))
+            self.persist_profile(self.selected_profile)
+        else:
+            self.profiles["new-profile"] = normalize_profile({}, "new-profile")
+            self.load_profile("new-profile")
+            ACTIVE_PROFILE.unlink(missing_ok=True)
         self.refresh_profile_list()
         self.set_status(f"已删除设备归档: {name}")
 
@@ -846,7 +998,7 @@ class App(tk.Tk):
             self.target_var.set("未选择设备")
         self.refresh_in_progress = False
         self.set_status(f"ADB 扫描完成，在线设备: {len(devices)}")
-        if index >= 0 and self.selection_context == "device":
+        if index >= 0 and self.selection_context == "device" and not self.refresh_selected_after_scan:
             self.request_selected_device_config()
         if self.refresh_selected_after_scan:
             self.refresh_selected_after_scan = False
@@ -862,7 +1014,7 @@ class App(tk.Tk):
         def worker() -> None:
             self.output_queue.put((
                 "device_config",
-                (serial, installed_config(serial), device_identity(serial)),
+                (serial, installed_config(serial), device_identity(serial), announce),
             ))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -910,58 +1062,84 @@ class App(tk.Tk):
                 return name
         return None
 
-    def apply_device_config(self, serial: str, result: dict, identity: dict | None = None) -> None:
+    def match_device_profile(self, serial: str, config: dict) -> str | None:
+        matched = self.match_profile(config) if config else None
+        if matched:
+            return matched
+        return next(
+            (name for name, profile in self.profiles.items() if str(profile.get("serial", "")) == serial),
+            None,
+        )
+
+    def apply_device_config(
+        self,
+        serial: str,
+        result: dict,
+        identity: dict | None = None,
+        verbose: bool = True,
+    ) -> None:
         if serial != self.vars["serial"].get():
             return
-        self.selection_context = "device"
-        if identity:
-            self.vars["deviceUniqueId"].set(identity.get("uniqueId", ""))
-            self.vars["deviceBrandModel"].set(identity.get("brandModel", ""))
-            self.profiles.setdefault(self.selected_profile, normalize_profile({}, self.selected_profile))
-            self.profiles[self.selected_profile].update({
-                "deviceUniqueId": identity.get("uniqueId", ""),
-                "deviceBrandModel": identity.get("brandModel", ""),
-            })
-            self.persist_profile(self.selected_profile)
-        frpc_state = "运行中" if result.get("running") else ("已安装但未运行" if result.get("frpcInstalled") else "未安装")
-        adb_state = "已安装" if result.get("adbInstalled") else "未安装"
-        self.service_state_var.set(f"FRPC: {frpc_state}    ADB 开机恢复: {adb_state}")
-        self.update_action_states(result)
-        if not result.get("frpcInstalled"):
-            self.append_output(str(result.get("message", "设备上没有已安装配置。")))
-            self.set_status(f"{serial}: FRPC {frpc_state}，ADB 开机恢复 {adb_state}")
-            return
         config = result.get("config", {})
-        matched = self.match_profile(config)
-        if matched:
-            self.load_profile(matched)
-            self.vars["serial"].set(serial)
-            self.locate_profile(matched)
-        elif config:
+        matched = self.match_device_profile(serial, config)
+        if not matched and config:
             imported_name = str(config.get("profileName") or f"device-{serial}")
             if not NAME_RE.fullmatch(imported_name):
                 imported_name = f"device-{re.sub(r'[^A-Za-z0-9_-]', '-', serial)}"
+            if imported_name in self.profiles:
+                index = 2
+                base_name = imported_name
+                while imported_name in self.profiles:
+                    imported_name = f"{base_name}-{index}"
+                    index += 1
             imported = normalize_profile(config, imported_name)
-            imported["serial"] = serial
-            imported["installBase"] = str(Path(str(result["installDir"])).parent).replace("\\", "/")
+            imported.update({
+                "serial": serial,
+                "installBase": str(Path(str(result["installDir"])).parent).replace("\\", "/"),
+                "includeAdbBootstrap": bool(result.get("adbInstalled")),
+                "enableFrpcLog": bool(result.get("logEnabled")),
+                "createdAt": now_text(),
+                "updatedAt": now_text(),
+            })
             self.profiles[imported_name] = imported
             self.refresh_profile_list()
-            self.load_profile(imported_name)
-            self.vars["serial"].set(serial)
-            self.locate_profile(imported_name)
             matched = imported_name
-        if identity:
-            # 配置匹配到其他归档后，身份信息应写入最终归档。
-            self.profiles.setdefault(self.selected_profile, normalize_profile({}, self.selected_profile))
-            self.profiles[self.selected_profile].update({
-                "deviceUniqueId": identity.get("uniqueId", ""),
-                "deviceBrandModel": identity.get("brandModel", ""),
+        if matched:
+            profile = self.profiles[matched]
+            profile.update({
+                "serial": serial,
+                "includeAdbBootstrap": bool(result.get("adbInstalled")),
+                "enableFrpcLog": bool(result.get("frpcInstalled") and result.get("logEnabled")),
+                "lastSeenAt": now_text(),
+                "lastFrpcInstalled": bool(result.get("frpcInstalled")),
+                "lastAdbInstalled": bool(result.get("adbInstalled")),
+                "lastFrpcRunning": bool(result.get("running")),
             })
+            if identity:
+                profile.update({
+                    "deviceUniqueId": identity.get("uniqueId", ""),
+                    "deviceBrandModel": identity.get("brandModel", ""),
+                })
+            self.persist_profile(matched)
+            self.load_profile(matched, refresh_online=False)
+            self.vars["serial"].set(serial)
+        frpc_state = "运行中" if result.get("running") else ("已安装但未运行" if result.get("frpcInstalled") else "未安装")
+        adb_state = "已安装" if result.get("adbInstalled") else "未安装"
+        self.frpc_installed_var.set(bool(result.get("frpcInstalled")))
+        self.adb_var.set(bool(result.get("adbInstalled")))
+        self.log_var.set(bool(result.get("frpcInstalled") and result.get("logEnabled")))
+        if identity:
             self.vars["deviceUniqueId"].set(identity.get("uniqueId", ""))
             self.vars["deviceBrandModel"].set(identity.get("brandModel", ""))
-            self.persist_profile(self.selected_profile)
         self.selection_context = "device"
+        self.set_editor_enabled(False)
+        self.service_state_var.set(f"FRPC: {frpc_state}    ADB 开机恢复: {adb_state}")
         self.update_action_states(result)
+        if not result.get("frpcInstalled"):
+            if verbose:
+                self.append_output(str(result.get("message", "设备上没有已安装配置。")))
+            self.set_status(f"{serial}: FRPC {frpc_state}，ADB 开机恢复 {adb_state}")
+            return
         lines = [
             f"设备: {serial}",
             f"FRPC 运行状态: {'运行中' if result.get('running') else '未运行'}",
@@ -976,13 +1154,13 @@ class App(tk.Tk):
             f"TOML 配置: {result.get('configPath', '')}",
             f"Token: {'已读取' if config.get('token') else '未配置'}",
         ]
-        self.append_output("\n".join(lines))
+        if verbose:
+            self.append_output("\n".join(lines))
         self.set_status(f"{serial}: 已读取设备配置" + (f"，定位到 {matched}" if matched else ""))
 
     def persist_profile(self, name: str) -> None:
         """将当前归档的设备识别信息等后台读取结果静默写入本地。"""
         profile = normalize_profile(self.profiles.get(name, {}), name)
-        profile["updatedAt"] = now_text()
         self.profiles[name] = profile
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         data = json.dumps(profile, ensure_ascii=False, indent=2) + "\n"
@@ -1042,6 +1220,7 @@ class App(tk.Tk):
             f"映射: 127.0.0.1:{profile.get('localPort')} -> {profile.get('remotePort')}",
             f"Token: {'已保存' if profile.get('token') else '未配置'}",
             f"归档创建时间: {profile.get('createdAt', '未记录')}",
+            f"归档保存次数: {len(profile.get('saveHistory', []))}",
             f"第一次安装时间（手机）: {profile.get('firstInstalledAt', '未记录')}",
             "",
             data["info"],
@@ -1064,6 +1243,7 @@ class App(tk.Tk):
             f"设备归档名称: {profile.get('profileName', self.selected_profile)}",
             f"创建时间: {profile.get('createdAt', '未记录')}",
             f"最后修改: {profile.get('updatedAt', '未记录')}",
+            f"保存历史次数: {len(profile.get('saveHistory', []))}",
             f"第一次安装（手机时间）: {profile.get('firstInstalledAt', '尚未安装')}",
             f"第一次安装设备: {profile.get('firstInstalledSerial', '未记录')}",
             "",
@@ -1110,13 +1290,20 @@ class App(tk.Tk):
         default.mkdir(parents=True, exist_ok=True)
         return filedialog.askdirectory(title="选择生成文件保存位置", initialdir=str(default))
 
-    def install_adb_only(self) -> None:
+    def install_adb_only(self, save_before: bool = True) -> None:
         serial = self.vars["serial"].get().strip()
         if not serial:
             messagebox.showerror("安装失败", "请先在左下列表选择在线 ADB 设备。")
             return
-        if not self.save_profile():
+        if not messagebox.askyesno(
+            "确认安装 ADB 开机恢复",
+            "该操作会以 Root 权限安装开机恢复脚本并持续尝试启用 adbd/TCP 5555。错误配置可能影响后续连接，是否继续？",
+        ):
             return
+        if save_before and not self.save_profile():
+            return
+        if not save_before:
+            self.persist_profile(self.selected_profile)
         installer = str(ROOT / "install-tcp-adb-preauthorized.bat")
         archive_name = self.selected_profile
         def execute_install() -> tuple[int, str]:
@@ -1144,6 +1331,20 @@ class App(tk.Tk):
     def install_frpc_only(self) -> None:
         self.adb_var.set(False)
         self.install()
+
+    def push_saved_frpc_profile(self) -> None:
+        serial = self.vars["serial"].get().strip()
+        profile = self.profiles.get(self.selected_profile, {})
+        if not serial:
+            messagebox.showerror("推送失败", "请先选择在线 ADB 设备。")
+            return
+        if str(profile.get("serial", "")) not in {"", serial}:
+            if not messagebox.askyesno(
+                "确认推送到其他设备",
+                f"归档记录的设备是 {profile.get('serial')}，当前设备是 {serial}。仍要推送？",
+            ):
+                return
+        self.install(save_before=False, include_adb=False)
 
     def generate_adb_only(self) -> None:
         output_dir = self.choose_output_directory()
@@ -1186,24 +1387,37 @@ class App(tk.Tk):
         self.adb_var.set(True)
         self.install()
 
-    def install(self) -> None:
+    def install(self, save_before: bool = True, include_adb: bool | None = None) -> None:
         serial = self.vars["serial"].get().strip()
         if not serial:
             messagebox.showerror("安装失败", "请先选择在线 ADB 设备。")
             return
-        if not self.save_profile():
+        if save_before and not self.save_profile():
             return
         installer = str(ROOT / "install-frpc-service.bat")
         profile_name = self.selected_profile
+        restore_active: str | None = None
+        if include_adb is not None:
+            restore_active = ACTIVE_PROFILE.read_text(encoding="utf-8") if ACTIVE_PROFILE.exists() else None
+            deployment = normalize_profile(self.profiles.get(profile_name, {}), profile_name)
+            deployment["includeAdbBootstrap"] = include_adb
+            ACTIVE_PROFILE.write_text(json.dumps(deployment, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         def execute_install() -> tuple[int, str]:
             # 安装前采集快照；只有安装命令成功后才把它写入“第一次安装”记录。
-            snapshot = device_info(serial)
-            code, output = run_command(["cmd.exe", "/d", "/c", installer, serial], 180)
-            if code == 0:
-                installed = installed_config(serial)
-                phone_install_time = installed.get("frpcInstalledAt") or installed.get("adbInstalledAt") or "未记录"
-                self.record_first_install(profile_name, serial, snapshot, str(phone_install_time))
-            return code, output
+            try:
+                snapshot = device_info(serial)
+                code, output = run_command(["cmd.exe", "/d", "/c", installer, serial], 180)
+                if code == 0:
+                    installed = installed_config(serial)
+                    phone_install_time = installed.get("frpcInstalledAt") or installed.get("adbInstalledAt") or "未记录"
+                    self.record_first_install(profile_name, serial, snapshot, str(phone_install_time))
+                return code, output
+            finally:
+                if include_adb is not None:
+                    if restore_active is None:
+                        ACTIVE_PROFILE.unlink(missing_ok=True)
+                    else:
+                        ACTIVE_PROFILE.write_text(restore_active, encoding="utf-8")
         self.run_async(
             execute_install,
             f"正在安装到: {serial}",
@@ -1287,8 +1501,10 @@ class App(tk.Tk):
                 if kind == "devices":
                     self.apply_devices(output)  # type: ignore[arg-type]
                 elif kind == "device_config":
-                    serial, result, identity = output  # type: ignore[misc]
-                    self.apply_device_config(serial, result, identity)
+                    values = output  # type: ignore[assignment]
+                    serial, result, identity = values[:3]
+                    verbose = values[3] if len(values) > 3 else True
+                    self.apply_device_config(serial, result, identity, verbose)
                 elif kind == "auto_name":
                     self.apply_auto_name(output)  # type: ignore[arg-type]
                 elif kind == "unified_details":
