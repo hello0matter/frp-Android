@@ -38,6 +38,7 @@ DEFAULTS = {
     "serial": "",
     "deviceUniqueId": "",
     "deviceBrandModel": "",
+    "note": "",
 }
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -349,28 +350,31 @@ class App(tk.Tk):
         right = ttk.Frame(self, padding=(4, 0, 8, 8))
         right.grid(row=1, column=1, sticky="nsew")
         right.columnconfigure(1, weight=1)
-        right.rowconfigure(11, weight=1)
+        right.rowconfigure(12, weight=1)
         self.editor_widgets: list[tk.Widget] = []
         fields = [("设备归档名称", "profileName"), ("服务器地址", "serverAddr"), ("服务器端口", "serverPort"),
-                  ("本地端口", "localPort"), ("远程端口", "remotePort"), ("Token", "token"),
-                  ("Root 数据目录", "installBase")]
+                   ("本地端口", "localPort"), ("远程端口", "remotePort"), ("Token", "token"),
+                   ("Root 数据目录", "installBase"), ("备注", "note")]
         for row, (label, key) in enumerate(fields):
             ttk.Label(right, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=5)
-            if key == "profileName":
+            if key in {"profileName", "note"}:
                 name_frame = ttk.Frame(right)
                 name_frame.grid(row=row, column=1, sticky="ew", pady=5)
                 name_frame.columnconfigure(0, weight=1)
                 entry = ttk.Entry(name_frame, textvariable=self.vars[key])
                 entry.grid(row=0, column=0, sticky="ew")
-                auto_name = ttk.Button(name_frame, text="自动命名", command=self.auto_name_archive)
-                auto_name.grid(row=0, column=1, padx=(6, 0))
-                self.editor_widgets.extend((entry, auto_name))
+                if key == "profileName":
+                    helper = ttk.Button(name_frame, text="自动命名", command=self.auto_name_archive)
+                else:
+                    helper = ttk.Button(name_frame, text="自动备注", command=self.auto_note_archive)
+                helper.grid(row=0, column=1, padx=(6, 0))
+                self.editor_widgets.extend((entry, helper))
             else:
                 entry = ttk.Entry(right, textvariable=self.vars[key], show="*" if key == "token" else "")
                 entry.grid(row=row, column=1, sticky="ew", pady=5)
                 self.editor_widgets.append(entry)
         options = ttk.Frame(right)
-        options.grid(row=7, column=1, sticky="w", pady=5)
+        options.grid(row=8, column=1, sticky="w", pady=5)
         frpc_installed = ttk.Checkbutton(
             options,
             text="FRPC 已安装",
@@ -383,12 +387,12 @@ class App(tk.Tk):
         log_check = ttk.Checkbutton(options, text="启用 FRPC 日志", variable=self.log_var)
         log_check.pack(side="left", padx=(20, 0))
         self.editor_widgets.extend((adb_check, log_check))
-        ttk.Label(right, text="目标设备").grid(row=8, column=0, sticky="w", padx=(0, 10), pady=5)
-        ttk.Label(right, textvariable=self.target_var).grid(row=8, column=1, sticky="w", pady=5)
+        ttk.Label(right, text="目标设备").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=5)
+        ttk.Label(right, textvariable=self.target_var).grid(row=9, column=1, sticky="w", pady=5)
 
         actions = ttk.Frame(right)
-        ttk.Label(right, textvariable=self.service_state_var).grid(row=9, column=1, sticky="w", pady=(3, 0))
-        actions.grid(row=10, column=0, columnspan=2, sticky="ew", pady=8)
+        ttk.Label(right, textvariable=self.service_state_var).grid(row=10, column=1, sticky="w", pady=(3, 0))
+        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=8)
         self.action_buttons: dict[str, ttk.Button] = {}
         action_specs = (
             ("save", "保存归档", self.save_profile),
@@ -401,9 +405,9 @@ class App(tk.Tk):
             button.pack(side="left", padx=(0, 5))
             self.action_buttons[key] = button
         self.update_action_states()
-        ttk.Label(right, text="执行输出").grid(row=11, column=0, sticky="nw", padx=(0, 10))
+        ttk.Label(right, text="执行输出").grid(row=12, column=0, sticky="nw", padx=(0, 10))
         self.output = tk.Text(right, height=14, wrap="none", state="disabled")
-        self.output.grid(row=11, column=1, sticky="nsew")
+        self.output.grid(row=12, column=1, sticky="nsew")
         status = ttk.Label(self, textvariable=self.status_var, relief="sunken", anchor="w", padding=(8, 4))
         status.grid(row=2, column=0, columnspan=2, sticky="ew")
 
@@ -731,6 +735,7 @@ class App(tk.Tk):
         copied = dict(source)
         copied.update({
             "profileName": name,
+            "note": "",
             "serial": "",
             "deviceUniqueId": "",
             "deviceBrandModel": "",
@@ -750,18 +755,30 @@ class App(tk.Tk):
         self.set_status(f"已复制设备归档，请选择目标设备并保存: {name}")
 
     def auto_name_archive(self) -> None:
+        self.request_identity_choice("名称", "profileName", sanitize_name=True)
+
+    def auto_note_archive(self) -> None:
+        self.request_identity_choice("备注", "note", sanitize_name=False)
+
+    def request_identity_choice(self, title: str, target_key: str, sanitize_name: bool) -> None:
         serial = self.vars["serial"].get().strip()
         if not serial:
-            messagebox.showinfo("自动命名", "请先选择在线 ADB 设备。")
+            messagebox.showinfo(f"自动{title}", "请先选择在线 ADB 设备。")
             return
-        self.set_status("正在读取设备唯一 ID 和型号...")
+        self.set_status(f"正在读取设备信息以生成{title}...")
         def worker() -> None:
-            self.output_queue.put(("auto_name", device_identity(serial)))
+            self.output_queue.put(("identity_choice", (title, target_key, sanitize_name, device_identity(serial))))
         threading.Thread(target=worker, daemon=True).start()
 
-    def apply_auto_name(self, identity: dict[str, str]) -> None:
+    def apply_identity_choice(
+        self,
+        title: str,
+        target_key: str,
+        sanitize_name: bool,
+        identity: dict[str, str],
+    ) -> None:
         dialog = tk.Toplevel(self)
-        dialog.title("选择设备归档名称")
+        dialog.title(f"选择设备归档{title}")
         dialog.transient(self)
         dialog.grab_set()
         options = [
@@ -775,13 +792,6 @@ class App(tk.Tk):
                     identity.get("brandModel", ""),
                 ))),
             ),
-            (
-                "时间 + 唯一 ID",
-                "-".join(filter(None, (
-                    datetime.now().strftime("%Y%m%d-%H%M%S"),
-                    identity.get("uniqueId", ""),
-                ))),
-            ),
         ]
         selected = tk.StringVar(value=options[0][1])
         for row, (label, value) in enumerate(options):
@@ -789,12 +799,14 @@ class App(tk.Tk):
                 row=row, column=0, sticky="w", padx=14, pady=6
             )
         def apply() -> None:
-            value = re.sub(r"[^A-Za-z0-9_-]+", "-", selected.get()).strip("-")
+            value = selected.get().strip()
+            if sanitize_name:
+                value = re.sub(r"[^A-Za-z0-9_-]+", "-", value).strip("-")
             if value:
-                self.vars["profileName"].set(value)
-                self.set_status(f"已选择设备归档名称: {value}")
+                self.vars[target_key].set(value)
+                self.set_status(f"已选择设备归档{title}: {value}")
             dialog.destroy()
-        ttk.Button(dialog, text="使用此名称", command=apply).grid(row=len(options), column=0, sticky="e", padx=14, pady=10)
+        ttk.Button(dialog, text=f"使用此{title}", command=apply).grid(row=len(options), column=0, sticky="e", padx=14, pady=10)
 
     def save_profile(self) -> bool:
         name = self.vars["profileName"].get().strip()
@@ -1193,11 +1205,12 @@ class App(tk.Tk):
         serial = str(data["serial"])
         identity = data["identity"]
         installed = data["installed"]
-        profile_name = self.match_profile(installed.get("config", {})) if installed.get("frpcInstalled") else None
+        profile_name = self.match_device_profile(serial, installed.get("config", {}))
         profile = normalize_profile(self.profiles.get(profile_name or self.selected_profile, {}), profile_name or self.selected_profile)
         lines = [
             "设备详情",
             f"归档名称: {profile.get('profileName', self.selected_profile)}",
+            f"本地备注: {profile.get('note') or '无'}",
             f"唯一 ID: {identity.get('uniqueId', '未提供')}",
             f"ADB 序列号: {serial}",
             f"品牌型号: {identity.get('brandModel', '未提供')}",
@@ -1219,6 +1232,7 @@ class App(tk.Tk):
             f"服务器: {profile.get('serverAddr')}:{profile.get('serverPort')}",
             f"映射: 127.0.0.1:{profile.get('localPort')} -> {profile.get('remotePort')}",
             f"Token: {'已保存' if profile.get('token') else '未配置'}",
+            f"备注: {profile.get('note') or '无'}",
             f"归档创建时间: {profile.get('createdAt', '未记录')}",
             f"归档保存次数: {len(profile.get('saveHistory', []))}",
             f"第一次安装时间（手机）: {profile.get('firstInstalledAt', '未记录')}",
@@ -1241,6 +1255,7 @@ class App(tk.Tk):
         profile = normalize_profile(self.profiles.get(self.selected_profile, {}), self.selected_profile)
         details = [
             f"设备归档名称: {profile.get('profileName', self.selected_profile)}",
+            f"备注: {profile.get('note') or '无'}",
             f"创建时间: {profile.get('createdAt', '未记录')}",
             f"最后修改: {profile.get('updatedAt', '未记录')}",
             f"保存历史次数: {len(profile.get('saveHistory', []))}",
@@ -1505,8 +1520,9 @@ class App(tk.Tk):
                     serial, result, identity = values[:3]
                     verbose = values[3] if len(values) > 3 else True
                     self.apply_device_config(serial, result, identity, verbose)
-                elif kind == "auto_name":
-                    self.apply_auto_name(output)  # type: ignore[arg-type]
+                elif kind == "identity_choice":
+                    title, target_key, sanitize_name, identity = output  # type: ignore[misc]
+                    self.apply_identity_choice(title, target_key, sanitize_name, identity)
                 elif kind == "unified_details":
                     self.apply_unified_details(output)  # type: ignore[arg-type]
                 elif kind == "global_search":
