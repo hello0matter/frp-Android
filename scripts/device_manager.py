@@ -266,6 +266,7 @@ class App(tk.Tk):
         self.settings = {"autoRefreshSeconds": 5}
         self.settings.update(load_json(MANAGER_SETTINGS))
         self.refresh_in_progress = False
+        self.refresh_selected_after_scan = False
         self.selection_context = "archive"
         self.vars = {key: tk.StringVar(value=str(value)) for key, value in DEFAULTS.items()}
         self.adb_var = tk.BooleanVar(value=True)
@@ -314,19 +315,33 @@ class App(tk.Tk):
         profile_frame = ttk.LabelFrame(left, text="本地设备归档", padding=8)
         profile_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 6))
         profile_frame.rowconfigure(0, weight=1)
+        profile_frame.columnconfigure(0, weight=1)
         self.profile_list = tk.Listbox(profile_frame, width=28, exportselection=False)
         self.profile_list.grid(row=0, column=0, sticky="nsew")
+        profile_scroll = ttk.Scrollbar(profile_frame, orient="vertical", command=self.profile_list.yview)
+        profile_scroll.grid(row=0, column=1, sticky="ns")
+        self.profile_list.configure(yscrollcommand=profile_scroll.set)
         self.profile_list.bind("<<ListboxSelect>>", self.select_profile)
         self.profile_list.bind("<Double-Button-1>", self.profile_double_click)
-        ttk.Button(profile_frame, text="删除归档", command=self.delete_profile).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(profile_frame, text="删除归档", command=self.delete_profile).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+        )
         device_frame = ttk.LabelFrame(left, text="在线 ADB 设备", padding=8)
         device_frame.grid(row=1, column=0, sticky="nsew")
         device_frame.rowconfigure(0, weight=1)
+        device_frame.columnconfigure(0, weight=1)
+        device_frame.configure(height=155)
+        device_frame.grid_propagate(False)
         self.device_list = tk.Listbox(device_frame, width=28, exportselection=False)
         self.device_list.grid(row=0, column=0, sticky="nsew")
+        device_scroll = ttk.Scrollbar(device_frame, orient="vertical", command=self.device_list.yview)
+        device_scroll.grid(row=0, column=1, sticky="ns")
+        self.device_list.configure(yscrollcommand=device_scroll.set)
         self.device_list.bind("<<ListboxSelect>>", self.device_list_selected)
         self.device_list.bind("<Double-Button-1>", self.device_double_click)
-        ttk.Button(device_frame, text="立即刷新", command=self.request_device_refresh).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(device_frame, text="立即刷新", command=self.request_device_refresh).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+        )
 
         right = ttk.Frame(self, padding=(4, 0, 8, 8))
         right.grid(row=1, column=1, sticky="nsew")
@@ -831,6 +846,26 @@ class App(tk.Tk):
             self.target_var.set("未选择设备")
         self.refresh_in_progress = False
         self.set_status(f"ADB 扫描完成，在线设备: {len(devices)}")
+        if index >= 0 and self.selection_context == "device":
+            self.request_selected_device_config()
+        if self.refresh_selected_after_scan:
+            self.refresh_selected_after_scan = False
+            self.after(2500, lambda: self.request_selected_device_config(announce=True))
+
+    def request_selected_device_config(self, announce: bool = False) -> None:
+        serial = self.vars["serial"].get().strip()
+        if not serial or not any(device.serial == serial for device in self.devices):
+            return
+        if announce:
+            self.set_status(f"正在刷新设备服务状态: {serial}")
+
+        def worker() -> None:
+            self.output_queue.put((
+                "device_config",
+                (serial, installed_config(serial), device_identity(serial)),
+            ))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def refresh_device_list(self) -> None:
         self.visible_devices = list(self.devices)
@@ -887,6 +922,7 @@ class App(tk.Tk):
                 "deviceUniqueId": identity.get("uniqueId", ""),
                 "deviceBrandModel": identity.get("brandModel", ""),
             })
+            self.persist_profile(self.selected_profile)
         frpc_state = "运行中" if result.get("running") else ("已安装但未运行" if result.get("frpcInstalled") else "未安装")
         adb_state = "已安装" if result.get("adbInstalled") else "未安装"
         self.service_state_var.set(f"FRPC: {frpc_state}    ADB 开机恢复: {adb_state}")
@@ -914,6 +950,16 @@ class App(tk.Tk):
             self.vars["serial"].set(serial)
             self.locate_profile(imported_name)
             matched = imported_name
+        if identity:
+            # 配置匹配到其他归档后，身份信息应写入最终归档。
+            self.profiles.setdefault(self.selected_profile, normalize_profile({}, self.selected_profile))
+            self.profiles[self.selected_profile].update({
+                "deviceUniqueId": identity.get("uniqueId", ""),
+                "deviceBrandModel": identity.get("brandModel", ""),
+            })
+            self.vars["deviceUniqueId"].set(identity.get("uniqueId", ""))
+            self.vars["deviceBrandModel"].set(identity.get("brandModel", ""))
+            self.persist_profile(self.selected_profile)
         self.selection_context = "device"
         self.update_action_states(result)
         lines = [
@@ -932,6 +978,17 @@ class App(tk.Tk):
         ]
         self.append_output("\n".join(lines))
         self.set_status(f"{serial}: 已读取设备配置" + (f"，定位到 {matched}" if matched else ""))
+
+    def persist_profile(self, name: str) -> None:
+        """将当前归档的设备识别信息等后台读取结果静默写入本地。"""
+        profile = normalize_profile(self.profiles.get(name, {}), name)
+        profile["updatedAt"] = now_text()
+        self.profiles[name] = profile
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        data = json.dumps(profile, ensure_ascii=False, indent=2) + "\n"
+        (PROFILE_DIR / f"{name}.json").write_text(data, encoding="utf-8")
+        if name == self.selected_profile:
+            ACTIVE_PROFILE.write_text(data, encoding="utf-8")
 
     @staticmethod
     def read_frpc_logs(serial: str, installed: dict) -> str:
@@ -1182,8 +1239,6 @@ class App(tk.Tk):
             if not re.fullmatch(r"/data/adb/service\.d/[A-Za-z0-9_-]+\.sh", service):
                 return 1, "设备上未找到 ADB 开机恢复服务。"
             code, output = adb(["shell", "su", "-c", f"sh {service} uninstall"], serial, 30)
-            if code == 0:
-                self.output_queue.put(("device_config", (serial, installed_config(serial), device_identity(serial))))
             return code, output
         self.run_async(execute, f"正在卸载 ADB 开机恢复服务: {serial}")
 
@@ -1199,8 +1254,6 @@ class App(tk.Tk):
                 return 1, "设备上未找到已安装的服务。请先点击安装当前。"
             service = lines[0].strip()
             result = adb(["shell", "su", "-c", f"sh {service} {action}"], serial, 30)
-            if result[0] == 0:
-                self.output_queue.put(("device_config", (serial, installed_config(serial), device_identity(serial))))
             return result
         self.run_async(execute, f"正在执行 {action}: {serial}")
 
@@ -1216,6 +1269,8 @@ class App(tk.Tk):
                     label = "成功" if success else ("超时" if code == 124 else "失败")
                     text = f"结果: {label}（退出码 {code}）\n{output or '命令没有返回其他输出。'}"
                     self.output_queue.put(("result_status", (success, f"{initial}: {label}")))
+                    if success:
+                        self.output_queue.put(("refresh_after_action", None))
                 else:
                     text = str(result)
                     self.output_queue.put(("result_status", (True, f"{initial}: 完成")))
@@ -1248,6 +1303,10 @@ class App(tk.Tk):
                     self.profiles[name] = normalize_profile(load_json(PROFILE_DIR / f"{name}.json"), name)
                     self.refresh_profile_list()
                     self.set_status(f"已记录配置 {name} 的第一次安装手机信息")
+                elif kind == "refresh_after_action":
+                    # 安装脚本可能暂时切换 USB 配置，先刷新列表，再延迟读取服务状态。
+                    self.refresh_selected_after_scan = True
+                    self.request_device_refresh()
                 elif kind == "result_status":
                     success, status = output  # type: ignore[misc]
                     self.set_status(("成功: " if success else "失败: ") + status)
