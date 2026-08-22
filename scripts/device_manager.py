@@ -37,6 +37,13 @@ DEFAULTS = {
     "enableFrpcLog": True,
     "enableFrpcSchedule": False,
     "frpcScheduleInterval": 3600,
+    "frpcScheduleBody": """child_pid=$(cat \"$CHILD_PID\" 2>/dev/null)
+if [ -n \"$child_pid\" ] && kill -0 \"$child_pid\" 2>/dev/null; then
+    kill \"$child_pid\" 2>/dev/null
+    if [ \"$LOG_ENABLED\" = \"1\" ]; then
+        printf '%s scheduled child restart\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" >> \"$LOG\"
+    fi
+fi""",
     "serial": "",
     "deviceUniqueId": "",
     "deviceBrandModel": "",
@@ -245,10 +252,17 @@ def installed_config(serial: str) -> dict:
     # 定时配置以手机上的实际 SH 为准，不能仅根据本地归档推断。
     code, service_text = adb([
         "shell", "su", "-c",
-        f"grep -E '^(SCHEDULE_ENABLED|SCHEDULE_INTERVAL)=' {service} 2>/dev/null",
+        f"cat {service} 2>/dev/null",
     ], serial)
     schedule_enabled = None
     schedule_interval = None
+    schedule_body = ""
+    body_match = re.search(
+        r"(?ms)^# BEGIN USER SCHEDULE BODY\s*\n(.*?)^# END USER SCHEDULE BODY\s*$",
+        service_text,
+    )
+    if body_match:
+        schedule_body = body_match.group(1).strip("\r\n")
     if code == 0:
         for line in service_text.splitlines():
             match = re.match(r"^(SCHEDULE_ENABLED|SCHEDULE_INTERVAL)=['\"]?([0-9]+)['\"]?\s*$", line.strip())
@@ -262,6 +276,8 @@ def installed_config(serial: str) -> dict:
         "scheduleConfigured": schedule_enabled is not None and schedule_interval is not None,
         "scheduleEnabled": schedule_enabled if schedule_enabled is not None else False,
         "scheduleInterval": schedule_interval if schedule_interval is not None else 3600,
+        "scheduleBodyConfigured": body_match is not None,
+        "scheduleBody": schedule_body,
     })
     if toml_code == 0 and toml:
         code, status = adb(["shell", "su", "-c", f"sh {service} status"], serial)
@@ -375,7 +391,7 @@ class App(tk.Tk):
         right = ttk.Frame(self, padding=(4, 0, 8, 8))
         right.grid(row=1, column=1, sticky="nsew")
         right.columnconfigure(1, weight=1)
-        right.rowconfigure(13, weight=1)
+        right.rowconfigure(14, weight=1)
         self.editor_widgets: list[tk.Widget] = []
         fields = [("设备归档名称", "profileName"), ("服务器地址", "serverAddr"), ("服务器端口", "serverPort"),
                    ("本地端口", "localPort"), ("远程端口", "remotePort"), ("Token", "token"),
@@ -420,12 +436,25 @@ class App(tk.Tk):
         schedule_entry = ttk.Entry(schedule_frame, textvariable=self.schedule_interval_var, width=10)
         schedule_entry.pack(side="left")
         self.editor_widgets.extend((schedule_check, schedule_entry))
-        ttk.Label(right, text="目标设备").grid(row=10, column=0, sticky="w", padx=(0, 10), pady=5)
-        ttk.Label(right, textvariable=self.target_var).grid(row=10, column=1, sticky="w", pady=5)
+        ttk.Label(right, text="定时执行段落").grid(row=10, column=0, sticky="nw", padx=(0, 10), pady=5)
+        schedule_body_frame = ttk.Frame(right)
+        schedule_body_frame.grid(row=10, column=1, sticky="ew", pady=5)
+        schedule_body_frame.rowconfigure(0, weight=1)
+        schedule_body_frame.columnconfigure(0, weight=1)
+        self.schedule_body_text = tk.Text(schedule_body_frame, height=6, width=70, wrap="none")
+        self.schedule_body_text.grid(row=0, column=0, sticky="ew")
+        schedule_body_y = ttk.Scrollbar(schedule_body_frame, orient="vertical", command=self.schedule_body_text.yview)
+        schedule_body_y.grid(row=0, column=1, sticky="ns")
+        schedule_body_x = ttk.Scrollbar(schedule_body_frame, orient="horizontal", command=self.schedule_body_text.xview)
+        schedule_body_x.grid(row=1, column=0, sticky="ew")
+        self.schedule_body_text.configure(yscrollcommand=schedule_body_y.set, xscrollcommand=schedule_body_x.set)
+        self.editor_widgets.append(self.schedule_body_text)
+        ttk.Label(right, text="目标设备").grid(row=11, column=0, sticky="w", padx=(0, 10), pady=5)
+        ttk.Label(right, textvariable=self.target_var).grid(row=11, column=1, sticky="w", pady=5)
 
         actions = ttk.Frame(right)
-        ttk.Label(right, textvariable=self.service_state_var).grid(row=11, column=1, sticky="w", pady=(3, 0))
-        actions.grid(row=12, column=0, columnspan=2, sticky="ew", pady=8)
+        ttk.Label(right, textvariable=self.service_state_var).grid(row=12, column=1, sticky="w", pady=(3, 0))
+        actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=8)
         self.action_buttons: dict[str, ttk.Button] = {}
         action_specs = (
             ("save", "保存归档", self.save_profile),
@@ -438,9 +467,9 @@ class App(tk.Tk):
             button.pack(side="left", padx=(0, 5))
             self.action_buttons[key] = button
         self.update_action_states()
-        ttk.Label(right, text="执行输出").grid(row=13, column=0, sticky="nw", padx=(0, 10))
+        ttk.Label(right, text="执行输出").grid(row=14, column=0, sticky="nw", padx=(0, 10))
         output_frame = ttk.Frame(right)
-        output_frame.grid(row=13, column=1, sticky="nsew")
+        output_frame.grid(row=14, column=1, sticky="nsew")
         output_frame.rowconfigure(0, weight=1)
         output_frame.columnconfigure(0, weight=1)
         self.output = tk.Text(output_frame, height=14, wrap="none", state="disabled")
@@ -696,6 +725,9 @@ class App(tk.Tk):
         self.log_var.set(bool(profile.get("enableFrpcLog", True)))
         self.schedule_var.set(bool(profile.get("enableFrpcSchedule", False)))
         self.schedule_interval_var.set(str(profile.get("frpcScheduleInterval", 3600)))
+        self.schedule_body_text.configure(state="normal")
+        self.schedule_body_text.delete("1.0", tk.END)
+        self.schedule_body_text.insert("1.0", str(profile.get("frpcScheduleBody", DEFAULTS["frpcScheduleBody"])))
         self.frpc_installed_var.set(bool(profile.get("lastFrpcInstalled", False)))
         self.locate_profile(name)
         self.set_editor_enabled(True)
@@ -892,6 +924,7 @@ class App(tk.Tk):
         profile["includeAdbBootstrap"] = self.adb_var.get()
         profile["enableFrpcLog"] = self.log_var.get()
         profile["enableFrpcSchedule"] = self.schedule_var.get()
+        profile["frpcScheduleBody"] = self.schedule_body_text.get("1.0", "end-1c").replace("\r\n", "\n").strip("\n")
         profile.setdefault("createdAt", now_text())
         history = list(profile.get("saveHistory", []))
         snapshot = {
@@ -1193,6 +1226,10 @@ class App(tk.Tk):
         if result.get("scheduleConfigured"):
             self.schedule_var.set(bool(result.get("scheduleEnabled")))
             self.schedule_interval_var.set(str(result.get("scheduleInterval", 3600)))
+        if result.get("scheduleBodyConfigured"):
+            self.schedule_body_text.configure(state="normal")
+            self.schedule_body_text.delete("1.0", tk.END)
+            self.schedule_body_text.insert("1.0", result.get("scheduleBody", ""))
         if identity:
             self.vars["deviceUniqueId"].set(identity.get("uniqueId", ""))
             self.vars["deviceBrandModel"].set(identity.get("brandModel", ""))
@@ -1280,6 +1317,8 @@ class App(tk.Tk):
             f"FRPC 日志文件: {installed.get('logPath') or '无'}",
             f"FRPC 定时自检: {'已启用' if installed.get('scheduleEnabled') else '未启用'}" if installed.get("scheduleConfigured") else "FRPC 定时自检: 未读取到配置",
             f"FRPC 定时周期: {installed.get('scheduleInterval')} 秒" if installed.get("scheduleConfigured") else "FRPC 定时周期: 未读取到配置",
+            "手机 SH 定时执行段落:",
+            installed.get("scheduleBody") if installed.get("scheduleBodyConfigured") else "未读取到定时执行段落",
             f"FRPC 安装时间（手机文件时间）: {installed.get('frpcInstalledAt') or '未记录'}",
             f"ADB 脚本: {installed.get('adbService') or '未安装'}",
             f"ADB 安装时间（手机文件时间）: {installed.get('adbInstalledAt') or '未记录'}",
@@ -1329,6 +1368,8 @@ class App(tk.Tk):
             f"FRPC 定时周期: {profile.get('frpcScheduleInterval', 3600)} 秒",
             f"手机最近读取的定时状态: {('已启用' if profile.get('lastScheduleEnabled') else '未启用') if profile.get('lastScheduleEnabled') is not None else '尚未读取'}",
             f"手机最近读取的定时周期: {profile.get('lastScheduleInterval') or '尚未读取'} 秒",
+            "归档定时执行段落:",
+            str(profile.get("frpcScheduleBody", DEFAULTS["frpcScheduleBody"])),
             f"第一次安装（手机时间）: {profile.get('firstInstalledAt', '尚未安装')}",
             f"第一次安装设备: {profile.get('firstInstalledSerial', '未记录')}",
             "",

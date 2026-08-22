@@ -15,9 +15,20 @@ param(
     [bool]$IncludeAdbBootstrap = $true,
     [bool]$EnableFrpcLog = $true,
     [bool]$EnableFrpcSchedule = $false,
-    [ValidateRange(10, 2147483)][int]$FrpcScheduleInterval = 3600
+    [ValidateRange(10, 2147483)][int]$FrpcScheduleInterval = 3600,
+    [string]$FrpcScheduleBody = ""
 )
 $ErrorActionPreference = "Stop"
+$defaultScheduleBody = @'
+child_pid=$(cat "$CHILD_PID" 2>/dev/null)
+if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+    kill "$child_pid" 2>/dev/null
+    if [ "$LOG_ENABLED" = "1" ]; then
+        printf '%s scheduled child restart\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
+    fi
+fi
+'@.Trim()
+$scheduleBodyFromProfile = $false
 $root = Split-Path -Parent $PSScriptRoot
 $defaultProfile = Join-Path $PSScriptRoot "profiles\active.json"
 $ProfilePath = if ($ProfilePath) { $ProfilePath } elseif (!$NoProfile -and (Test-Path $defaultProfile)) { $defaultProfile } else { $null }
@@ -39,8 +50,11 @@ if ($ProfilePath -and (Test-Path -LiteralPath $ProfilePath)) {
     $value = & $get "enableFrpcLog"; if ($null -ne $value) { $EnableFrpcLog = [bool]$value }
     $value = & $get "enableFrpcSchedule"; if ($null -ne $value) { $EnableFrpcSchedule = [bool]$value }
     $value = & $get "frpcScheduleInterval"; if ($null -ne $value -and $value) { $FrpcScheduleInterval = [int]$value }
+    $property = $profile.PSObject.Properties["frpcScheduleBody"]
+    if ($null -ne $property) { $FrpcScheduleBody = [string]$property.Value; $scheduleBodyFromProfile = $true }
     $value = & $get "profileName"; if ($null -ne $value -and $value) { $ProfileName = [string]$value }
 }
+$scheduleBody = if ($scheduleBodyFromProfile -or $FrpcScheduleBody) { $FrpcScheduleBody } else { $defaultScheduleBody }
 $TemplatePath = if ($TemplatePath) { $TemplatePath } else { Join-Path $PSScriptRoot "frpc-service.sh" }
 $OutputDirectory = if ($OutputDirectory) { $OutputDirectory } else { Join-Path $PSScriptRoot "personalized\service" }
 $binary = Join-Path $root "app\src\main\jniLibs\$Abi\libfrpc.so"
@@ -67,10 +81,11 @@ if (([regex]::Matches($template, "__INSTALL_NAME__").Count) -ne 1 -or
     ([regex]::Matches($template, "__LOG_NAME__").Count) -ne 1 -or
     ([regex]::Matches($template, "__LOG_ENABLED__").Count) -ne 1 -or
     ([regex]::Matches($template, "__SCHEDULE_ENABLED__").Count) -ne 1 -or
-    ([regex]::Matches($template, "__SCHEDULE_INTERVAL__").Count) -ne 1) { throw "Invalid template" }
+    ([regex]::Matches($template, "__SCHEDULE_INTERVAL__").Count) -ne 1 -or
+    ([regex]::Matches($template, "__SCHEDULE_BODY__").Count) -ne 1) { throw "Invalid template" }
 $logEnabledValue = if ($EnableFrpcLog) { "1" } else { "0" }
 $scheduleEnabledValue = if ($EnableFrpcSchedule) { "1" } else { "0" }
-$script = $template.Replace("__INSTALL_NAME__", $name).Replace("__INSTALL_ROOT__", "$InstallBase/$name").Replace("__LOG_NAME__", $logName).Replace("__LOG_ENABLED__", $logEnabledValue).Replace("__SCHEDULE_ENABLED__", $scheduleEnabledValue).Replace("__SCHEDULE_INTERVAL__", [string]$FrpcScheduleInterval)
+$script = $template.Replace("__INSTALL_NAME__", $name).Replace("__INSTALL_ROOT__", "$InstallBase/$name").Replace("__LOG_NAME__", $logName).Replace("__LOG_ENABLED__", $logEnabledValue).Replace("__SCHEDULE_ENABLED__", $scheduleEnabledValue).Replace("__SCHEDULE_INTERVAL__", [string]$FrpcScheduleInterval).Replace("__SCHEDULE_BODY__", $scheduleBody)
 $adbScriptName = ""
 if ($IncludeAdbBootstrap) {
     $adbTemp = Join-Path ([IO.Path]::GetTempPath()) "adb-service-$PID"

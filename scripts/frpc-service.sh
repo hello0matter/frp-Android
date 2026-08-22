@@ -120,13 +120,9 @@ run_schedule() {
     trap 'rm -f "$SCHEDULE_PID"; exit 0' HUP INT TERM
     while [ "$SCHEDULE_ENABLED" = "1" ] && [ "$SCHEDULE_INTERVAL" -ge 10 ] 2>/dev/null; do
         sleep "$SCHEDULE_INTERVAL"
-        child_pid=$(cat "$CHILD_PID" 2>/dev/null)
-        if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
-            kill "$child_pid" 2>/dev/null
-            if [ "$LOG_ENABLED" = "1" ]; then
-                printf '%s scheduled child restart\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
-            fi
-        fi
+# BEGIN USER SCHEDULE BODY
+__SCHEDULE_BODY__
+# END USER SCHEDULE BODY
     done
     rm -f "$SCHEDULE_PID"
 }
