@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent
 PROFILE_DIR = ROOT / "profiles"
 ACTIVE_PROFILE = PROFILE_DIR / "active.json"
 MANAGER_SETTINGS = PROFILE_DIR / "manager-settings.json"
+HELP_FILE = ROOT.parent / "FRPC_ADB_MANAGER_HELP.txt"
 DEFAULTS = {
     "profileName": "new-profile",
     "serverAddr": "39.107.228.222",
@@ -352,6 +353,7 @@ class App(tk.Tk):
         ttk.Button(top, text="搜索...", command=self.open_global_search).grid(row=0, column=2, padx=6)
         ttk.Button(top, text="刷新设备", command=self.request_device_refresh).grid(row=0, column=3, padx=6)
         ttk.Button(top, text="新建设备归档", command=self.new_profile).grid(row=0, column=4)
+        ttk.Button(top, text="?", width=3, command=self.open_help).grid(row=0, column=5, padx=(8, 0))
 
         left = ttk.Frame(self, padding=(8, 0, 4, 8))
         left.grid(row=1, column=0, sticky="nsew")
@@ -1419,6 +1421,16 @@ class App(tk.Tk):
             self.set_status(f"全局设置已保存，ADB 每 {value} 秒刷新")
             dialog.destroy()
         ttk.Button(frame, text="保存", command=save).grid(row=2, column=0, columnspan=2, sticky="e")
+
+    def open_help(self) -> None:
+        """打开随程序提供的纯文本操作说明。"""
+        if not HELP_FILE.exists():
+            messagebox.showerror("操作说明", f"找不到说明文件：{HELP_FILE}")
+            return
+        try:
+            os.startfile(str(HELP_FILE))
+        except OSError as exc:
+            messagebox.showerror("操作说明", f"无法打开说明文件：{exc}")
 
     def choose_output_directory(self) -> str:
         default = ROOT / "personalized"
