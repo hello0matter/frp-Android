@@ -35,6 +35,8 @@ DEFAULTS = {
     "installBase": "/data/adb",
     "includeAdbBootstrap": True,
     "enableFrpcLog": True,
+    "enableFrpcSchedule": False,
+    "frpcScheduleInterval": 3600,
     "serial": "",
     "deviceUniqueId": "",
     "deviceBrandModel": "",
@@ -228,7 +230,7 @@ def installed_config(serial: str) -> dict:
     if log_path:
         code, _ = adb(["shell", "su", "-c", f"test -f {log_path}"], serial)
         log_exists = code == 0
-    code, toml = adb(["shell", "su", "-c", f"cat {config_path} 2>/dev/null"], serial)
+    toml_code, toml = adb(["shell", "su", "-c", f"cat {config_path} 2>/dev/null"], serial)
     result.update({
         "installed": True,
         "frpcInstalled": True,
@@ -238,9 +240,30 @@ def installed_config(serial: str) -> dict:
         "configPath": config_path,
         "logPath": log_path if log_exists else "",
         "logEnabled": log_exists,
-        "config": parse_installed_toml(toml) if code == 0 else {},
+        "config": parse_installed_toml(toml) if toml_code == 0 else {},
     })
-    if code == 0 and toml:
+    # 定时配置以手机上的实际 SH 为准，不能仅根据本地归档推断。
+    code, service_text = adb([
+        "shell", "su", "-c",
+        f"grep -E '^(SCHEDULE_ENABLED|SCHEDULE_INTERVAL)=' {service} 2>/dev/null",
+    ], serial)
+    schedule_enabled = None
+    schedule_interval = None
+    if code == 0:
+        for line in service_text.splitlines():
+            match = re.match(r"^(SCHEDULE_ENABLED|SCHEDULE_INTERVAL)=['\"]?([0-9]+)['\"]?\s*$", line.strip())
+            if not match:
+                continue
+            if match.group(1) == "SCHEDULE_ENABLED":
+                schedule_enabled = match.group(2) == "1"
+            else:
+                schedule_interval = int(match.group(2))
+    result.update({
+        "scheduleConfigured": schedule_enabled is not None and schedule_interval is not None,
+        "scheduleEnabled": schedule_enabled if schedule_enabled is not None else False,
+        "scheduleInterval": schedule_interval if schedule_interval is not None else 3600,
+    })
+    if toml_code == 0 and toml:
         code, status = adb(["shell", "su", "-c", f"sh {service} status"], serial)
         result["running"] = code == 0 and "running" in status
         result["message"] = "FRPC 和 ADB 服务状态读取完成。" if result["adbInstalled"] else "FRPC 服务状态读取完成，未找到 ADB 开机服务。"
@@ -272,6 +295,8 @@ class App(tk.Tk):
         self.vars = {key: tk.StringVar(value=str(value)) for key, value in DEFAULTS.items()}
         self.adb_var = tk.BooleanVar(value=True)
         self.log_var = tk.BooleanVar(value=True)
+        self.schedule_var = tk.BooleanVar(value=False)
+        self.schedule_interval_var = tk.StringVar(value="3600")
         self.frpc_installed_var = tk.BooleanVar(value=False)
         self.target_var = tk.StringVar(value="未选择设备")
         self.service_state_var = tk.StringVar(value="FRPC: 未知    ADB 开机恢复: 未知")
@@ -350,7 +375,7 @@ class App(tk.Tk):
         right = ttk.Frame(self, padding=(4, 0, 8, 8))
         right.grid(row=1, column=1, sticky="nsew")
         right.columnconfigure(1, weight=1)
-        right.rowconfigure(12, weight=1)
+        right.rowconfigure(13, weight=1)
         self.editor_widgets: list[tk.Widget] = []
         fields = [("设备归档名称", "profileName"), ("服务器地址", "serverAddr"), ("服务器端口", "serverPort"),
                    ("本地端口", "localPort"), ("远程端口", "remotePort"), ("Token", "token"),
@@ -387,12 +412,20 @@ class App(tk.Tk):
         log_check = ttk.Checkbutton(options, text="启用 FRPC 日志", variable=self.log_var)
         log_check.pack(side="left", padx=(20, 0))
         self.editor_widgets.extend((adb_check, log_check))
-        ttk.Label(right, text="目标设备").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=5)
-        ttk.Label(right, textvariable=self.target_var).grid(row=9, column=1, sticky="w", pady=5)
+        schedule_frame = ttk.Frame(right)
+        schedule_frame.grid(row=9, column=1, sticky="w", pady=5)
+        schedule_check = ttk.Checkbutton(schedule_frame, text="启用 FRPC 定时自检", variable=self.schedule_var)
+        schedule_check.pack(side="left")
+        ttk.Label(schedule_frame, text="周期（秒）").pack(side="left", padx=(18, 4))
+        schedule_entry = ttk.Entry(schedule_frame, textvariable=self.schedule_interval_var, width=10)
+        schedule_entry.pack(side="left")
+        self.editor_widgets.extend((schedule_check, schedule_entry))
+        ttk.Label(right, text="目标设备").grid(row=10, column=0, sticky="w", padx=(0, 10), pady=5)
+        ttk.Label(right, textvariable=self.target_var).grid(row=10, column=1, sticky="w", pady=5)
 
         actions = ttk.Frame(right)
-        ttk.Label(right, textvariable=self.service_state_var).grid(row=10, column=1, sticky="w", pady=(3, 0))
-        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=8)
+        ttk.Label(right, textvariable=self.service_state_var).grid(row=11, column=1, sticky="w", pady=(3, 0))
+        actions.grid(row=12, column=0, columnspan=2, sticky="ew", pady=8)
         self.action_buttons: dict[str, ttk.Button] = {}
         action_specs = (
             ("save", "保存归档", self.save_profile),
@@ -405,9 +438,9 @@ class App(tk.Tk):
             button.pack(side="left", padx=(0, 5))
             self.action_buttons[key] = button
         self.update_action_states()
-        ttk.Label(right, text="执行输出").grid(row=12, column=0, sticky="nw", padx=(0, 10))
+        ttk.Label(right, text="执行输出").grid(row=13, column=0, sticky="nw", padx=(0, 10))
         output_frame = ttk.Frame(right)
-        output_frame.grid(row=12, column=1, sticky="nsew")
+        output_frame.grid(row=13, column=1, sticky="nsew")
         output_frame.rowconfigure(0, weight=1)
         output_frame.columnconfigure(0, weight=1)
         self.output = tk.Text(output_frame, height=14, wrap="none", state="disabled")
@@ -657,10 +690,12 @@ class App(tk.Tk):
         self.selected_profile = name
         profile = normalize_profile(self.profiles.get(name, {}), name)
         for key in DEFAULTS:
-            if key not in {"includeAdbBootstrap", "enableFrpcLog"}:
+            if key not in {"includeAdbBootstrap", "enableFrpcLog", "enableFrpcSchedule"}:
                 self.vars[key].set(str(profile.get(key, DEFAULTS[key])))
         self.adb_var.set(bool(profile.get("includeAdbBootstrap", True)))
         self.log_var.set(bool(profile.get("enableFrpcLog", True)))
+        self.schedule_var.set(bool(profile.get("enableFrpcSchedule", False)))
+        self.schedule_interval_var.set(str(profile.get("frpcScheduleInterval", 3600)))
         self.frpc_installed_var.set(bool(profile.get("lastFrpcInstalled", False)))
         self.locate_profile(name)
         self.set_editor_enabled(True)
@@ -846,13 +881,17 @@ class App(tk.Tk):
                 profile[key] = int(profile[key])
                 if not 1 <= profile[key] <= 65535:
                     raise ValueError
+            profile["frpcScheduleInterval"] = int(profile["frpcScheduleInterval"])
+            if not 10 <= profile["frpcScheduleInterval"] <= 2147483:
+                raise ValueError
             if not profile["serverAddr"] or not profile["installBase"].startswith("/") or ".." in profile["installBase"]:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("归档错误", "服务器地址、端口和 Root 数据目录无效。")
+            messagebox.showerror("归档错误", "服务器地址、端口、Root 数据目录或定时周期无效。定时周期范围为 10 到 2147483 秒。")
             return False
         profile["includeAdbBootstrap"] = self.adb_var.get()
         profile["enableFrpcLog"] = self.log_var.get()
+        profile["enableFrpcSchedule"] = self.schedule_var.get()
         profile.setdefault("createdAt", now_text())
         history = list(profile.get("saveHistory", []))
         snapshot = {
@@ -1135,6 +1174,8 @@ class App(tk.Tk):
                 "lastFrpcInstalled": bool(result.get("frpcInstalled")),
                 "lastAdbInstalled": bool(result.get("adbInstalled")),
                 "lastFrpcRunning": bool(result.get("running")),
+                "lastScheduleEnabled": bool(result.get("scheduleEnabled")) if result.get("scheduleConfigured") else None,
+                "lastScheduleInterval": result.get("scheduleInterval") if result.get("scheduleConfigured") else None,
             })
             if identity:
                 profile.update({
@@ -1149,6 +1190,9 @@ class App(tk.Tk):
         self.frpc_installed_var.set(bool(result.get("frpcInstalled")))
         self.adb_var.set(bool(result.get("adbInstalled")))
         self.log_var.set(bool(result.get("frpcInstalled") and result.get("logEnabled")))
+        if result.get("scheduleConfigured"):
+            self.schedule_var.set(bool(result.get("scheduleEnabled")))
+            self.schedule_interval_var.set(str(result.get("scheduleInterval", 3600)))
         if identity:
             self.vars["deviceUniqueId"].set(identity.get("uniqueId", ""))
             self.vars["deviceBrandModel"].set(identity.get("brandModel", ""))
@@ -1164,6 +1208,8 @@ class App(tk.Tk):
         lines = [
             f"设备: {serial}",
             f"FRPC 运行状态: {'运行中' if result.get('running') else '未运行'}",
+            f"FRPC 定时自检: {'已启用' if result.get('scheduleEnabled') else '未启用'}" if result.get("scheduleConfigured") else "FRPC 定时自检: 未读取到配置",
+            f"FRPC 定时周期: {result.get('scheduleInterval')} 秒" if result.get("scheduleConfigured") else "FRPC 定时周期: 未读取到配置",
             f"ADB 开机恢复: {adb_state}",
             f"FRPC 安装时间（手机）: {result.get('frpcInstalledAt') or '未记录'}",
             f"ADB 安装时间（手机）: {result.get('adbInstalledAt') or '未记录'}",
@@ -1232,6 +1278,8 @@ class App(tk.Tk):
             f"FRPC TOML: {installed.get('configPath') or '无'}",
             f"FRPC 日志状态: {'已启用' if installed.get('logEnabled') else '未启用或尚未生成'}",
             f"FRPC 日志文件: {installed.get('logPath') or '无'}",
+            f"FRPC 定时自检: {'已启用' if installed.get('scheduleEnabled') else '未启用'}" if installed.get("scheduleConfigured") else "FRPC 定时自检: 未读取到配置",
+            f"FRPC 定时周期: {installed.get('scheduleInterval')} 秒" if installed.get("scheduleConfigured") else "FRPC 定时周期: 未读取到配置",
             f"FRPC 安装时间（手机文件时间）: {installed.get('frpcInstalledAt') or '未记录'}",
             f"ADB 脚本: {installed.get('adbService') or '未安装'}",
             f"ADB 安装时间（手机文件时间）: {installed.get('adbInstalledAt') or '未记录'}",
@@ -1277,6 +1325,10 @@ class App(tk.Tk):
             f"创建时间: {profile.get('createdAt', '未记录')}",
             f"最后修改: {profile.get('updatedAt', '未记录')}",
             f"保存历史次数: {len(profile.get('saveHistory', []))}",
+            f"FRPC 定时自检配置: {'已启用' if profile.get('enableFrpcSchedule') else '未启用'}",
+            f"FRPC 定时周期: {profile.get('frpcScheduleInterval', 3600)} 秒",
+            f"手机最近读取的定时状态: {('已启用' if profile.get('lastScheduleEnabled') else '未启用') if profile.get('lastScheduleEnabled') is not None else '尚未读取'}",
+            f"手机最近读取的定时周期: {profile.get('lastScheduleInterval') or '尚未读取'} 秒",
             f"第一次安装（手机时间）: {profile.get('firstInstalledAt', '尚未安装')}",
             f"第一次安装设备: {profile.get('firstInstalledSerial', '未记录')}",
             "",
