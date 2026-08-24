@@ -169,7 +169,7 @@ SCHEDULE_INTERVAL='3600'
 
 ### 编辑定时执行段落
 
-设备管理器中的“定时执行段落”是实际写入手机 SH 的多行 Shell 代码。每次周期等待结束后，手机端会执行该段落；段落可以使用服务脚本已有变量，例如 `$CHILD_PID`、`$LOG`、`$LOG_ENABLED`、`$BIN` 和 `$CONFIG`。默认段落会结束当前 FRPC 子进程，让 supervisor 自动重启它。
+设备管理器中的“定时执行段落”是实际写入手机 SH 的多行 Shell 代码。每次周期等待结束后，手机端会执行该段落；段落可以使用服务脚本已有变量，例如 `$CHILD_PID`、`$LOG`、`$LOG_ENABLED`、`$BIN`、`$CONFIG` 和 `$DEVICE_ID`。默认段落会结束当前 FRPC 子进程，让 supervisor 自动重启它。
 
 在线读取设备时，管理器会从手机 SH 的以下标记之间读取实际内容：
 
@@ -180,6 +180,8 @@ SCHEDULE_INTERVAL='3600'
 ```
 
 因此修改面板内容后必须重新生成或安装服务，手机上的段落才会更新。该编辑框执行的是 Root 权限 Shell，请只填入自己确认过的命令；关闭“启用 FRPC 定时自检”时，段落不会被执行。
+
+`$DEVICE_ID` 优先读取 `ro.boot.serialno`，失败时回退到 `ro.serialno` 或 `android_id`。它可能因权限、刷机或厂商实现为空或变化，不建议直接写入公开日志。
 
 ## 卸载服务
 

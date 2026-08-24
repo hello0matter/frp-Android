@@ -15,6 +15,10 @@ LOG="$INSTALL_DIR/__LOG_NAME__"
 LOG_ENABLED='__LOG_ENABLED__'
 SCHEDULE_ENABLED='__SCHEDULE_ENABLED__'
 SCHEDULE_INTERVAL='__SCHEDULE_INTERVAL__'
+# 设备标识仅供定时执行段落使用，不写入 FRPC 配置和日志。
+DEVICE_ID=$(getprop ro.boot.serialno 2>/dev/null)
+[ -n "$DEVICE_ID" ] || DEVICE_ID=$(getprop ro.serialno 2>/dev/null)
+[ -n "$DEVICE_ID" ] || DEVICE_ID=$(settings get secure android_id 2>/dev/null)
 STATE=/data/adb/service-state
 SOURCE_DIR=${0%/*}
 SOURCE_BIN="$SOURCE_DIR/$INSTALL_NAME"

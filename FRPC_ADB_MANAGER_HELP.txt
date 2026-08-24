@@ -39,6 +39,7 @@ FRPC / ADB 设备管理器操作说明
   $BIN             FRPC 二进制路径
   $CONFIG          FRPC TOML 路径
   $INSTALL_DIR     FRPC 随机数据目录
+  $DEVICE_ID       手机设备标识，优先读取 ro.boot.serialno，失败时回退到 ro.serialno 或 android_id
 
 示例：检查标记文件后重启 FRPC：
   if [ -f "$INSTALL_DIR/restart.flag" ]; then
@@ -48,6 +49,7 @@ FRPC / ADB 设备管理器操作说明
 
 注意：段落以 Root 权限执行。不要填写来源不明的命令，不要随意 rm -rf，
 不要修改 service.d 中的其他服务。错误的 Shell 可能导致 FRPC 定时任务失败。
+$DEVICE_ID 可能因权限、刷机或厂商实现为空或变化，不要把它直接写入公开日志。
 
 四、随机路径与日志
 ------------------
