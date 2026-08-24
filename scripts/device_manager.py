@@ -438,7 +438,10 @@ class App(tk.Tk):
         schedule_entry = ttk.Entry(schedule_frame, textvariable=self.schedule_interval_var, width=10)
         schedule_entry.pack(side="left")
         self.editor_widgets.extend((schedule_check, schedule_entry))
-        ttk.Label(right, text="定时执行段落").grid(row=10, column=0, sticky="nw", padx=(0, 10), pady=5)
+        schedule_label_frame = ttk.Frame(right)
+        schedule_label_frame.grid(row=10, column=0, sticky="nw", padx=(0, 10), pady=5)
+        ttk.Label(schedule_label_frame, text="定时执行段落").pack(side="left")
+        ttk.Button(schedule_label_frame, text="放大编辑...", command=self.open_schedule_editor).pack(side="left", padx=(8, 0))
         schedule_body_frame = ttk.Frame(right)
         schedule_body_frame.grid(row=10, column=1, sticky="ew", pady=5)
         schedule_body_frame.rowconfigure(0, weight=1)
@@ -1395,6 +1398,44 @@ class App(tk.Tk):
         text.insert("1.0", "\n".join(details))
         text.configure(state="disabled")
 
+    def open_schedule_editor(self) -> None:
+        """在独立大窗口编辑定时执行段落。"""
+        dialog = tk.Toplevel(self)
+        dialog.title("放大编辑 - 定时执行段落")
+        dialog.geometry("1100x700")
+        dialog.transient(self)
+
+        frame = ttk.Frame(dialog, padding=8)
+        frame.pack(fill="both", expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        editor = tk.Text(frame, wrap="none", undo=True, font=("Consolas", 10))
+        editor.grid(row=0, column=0, sticky="nsew")
+        scroll_y = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        editor.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        editor.insert("1.0", self.schedule_body_text.get("1.0", "end-1c"))
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(
+            buttons,
+            text="应用后会回写主界面的定时段落；保存归档并重新推送后才会到手机。",
+            foreground="#666666",
+        ).pack(side="left")
+
+        def apply() -> None:
+            self.schedule_body_text.configure(state="normal")
+            self.schedule_body_text.delete("1.0", tk.END)
+            self.schedule_body_text.insert("1.0", editor.get("1.0", "end-1c"))
+            self.set_status("已更新定时执行段落，请保存归档后再推送")
+            dialog.destroy()
+
+        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="right", padx=(6, 0))
+        ttk.Button(buttons, text="应用", command=apply).pack(side="right")
+        editor.focus_set()
     def show_global_settings(self) -> None:
         dialog = tk.Toplevel(self)
         dialog.title("全局设置")
