@@ -437,11 +437,12 @@ class App(tk.Tk):
         ttk.Label(schedule_frame, text="周期（秒）").pack(side="left", padx=(18, 4))
         schedule_entry = ttk.Entry(schedule_frame, textvariable=self.schedule_interval_var, width=10)
         schedule_entry.pack(side="left")
+        ttk.Button(schedule_frame, text="放大编辑...", command=self.open_schedule_editor).pack(side="left", padx=(8, 0))
+        ttk.Button(schedule_frame, text="服务器模板...", command=self.open_server_template_dialog).pack(side="left", padx=(6, 0))
         self.editor_widgets.extend((schedule_check, schedule_entry))
         schedule_label_frame = ttk.Frame(right)
         schedule_label_frame.grid(row=10, column=0, sticky="nw", padx=(0, 10), pady=5)
         ttk.Label(schedule_label_frame, text="定时执行段落").pack(side="left")
-        ttk.Button(schedule_label_frame, text="放大编辑...", command=self.open_schedule_editor).pack(side="left", padx=(8, 0))
         schedule_body_frame = ttk.Frame(right)
         schedule_body_frame.grid(row=10, column=1, sticky="ew", pady=5)
         schedule_body_frame.rowconfigure(0, weight=1)
@@ -1436,6 +1437,124 @@ class App(tk.Tk):
         ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="right", padx=(6, 0))
         ttk.Button(buttons, text="应用", command=apply).pack(side="right")
         editor.focus_set()
+    def open_server_template_dialog(self) -> None:
+        """向定时执行段落追加服务器注册、心跳、自毁和上传模板。"""
+        dialog = tk.Toplevel(self)
+        dialog.title("服务器接口模板")
+        dialog.geometry("620x430")
+        dialog.transient(self)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=14)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="服务器基础地址").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        base_url = tk.StringVar(value="http://50.114.113.121")
+        ttk.Entry(frame, textvariable=base_url).grid(row=0, column=1, sticky="ew", pady=6)
+        ttk.Label(frame, text="软件类型").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
+        software_type = tk.StringVar(value="frp-android")
+        ttk.Entry(frame, textvariable=software_type).grid(row=1, column=1, sticky="ew", pady=6)
+
+        options = ttk.LabelFrame(frame, text="插入内容", padding=10)
+        options.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 6))
+        register_var = tk.BooleanVar(value=True)
+        heartbeat_var = tk.BooleanVar(value=True)
+        self_destruct_var = tk.BooleanVar(value=True)
+        upload_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options, text="注册设备", variable=register_var).pack(anchor="w", pady=3)
+        ttk.Checkbutton(options, text="心跳并接收命令", variable=heartbeat_var).pack(anchor="w", pady=3)
+        ttk.Checkbutton(options, text="处理自毁命令（危险）", variable=self_destruct_var).pack(anchor="w", pady=3)
+        ttk.Checkbutton(options, text="写入上传接口（默认不上传）", variable=upload_var).pack(anchor="w", pady=3)
+        ttk.Label(
+            frame,
+            text="确认后只追加到编辑框，不会立即执行或推送。注册会使用本地标记避免重复注册；上传只定义接口，不会自动上传。",
+            foreground="#9a3412",
+            wraplength=580,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 10))
+
+        def insert_template() -> None:
+            url = base_url.get().strip().rstrip("/")
+            kind = software_type.get().strip() or "frp-android"
+            if not re.fullmatch(r"https?://[^\\s]+", url):
+                messagebox.showerror("地址错误", "服务器地址必须以 http:// 或 https:// 开头。", parent=dialog)
+                return
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", kind):
+                messagebox.showerror("类型错误", "软件类型只能包含字母、数字、点、下划线和短横线。", parent=dialog)
+                return
+            blocks = [
+                "",
+                "# ===== server integration template =====",
+                f"DEVICE_SERVER_BASE='{url}'",
+                f"DEVICE_SOFTWARE_TYPE='{kind}'",
+                "",
+                "post_json() {",
+                "    post_url=$1",
+                "    post_body=$2",
+                "    if command -v curl >/dev/null 2>&1; then",
+                "        curl -fsS --connect-timeout 10 --max-time 20 -X POST \\",
+                "            -H 'Content-Type: application/json' -d \"$post_body\" \"$post_url\" 2>/dev/null",
+                "    elif command -v wget >/dev/null 2>&1; then",
+                "        wget -qO- --timeout=20 --post-data=\"$post_body\" \\",
+                "            --header='Content-Type: application/json' \"$post_url\" 2>/dev/null",
+                "    else",
+                "        return 127",
+                "    fi",
+                "}",
+                "",
+            ]
+            if register_var.get():
+                blocks += [
+                    "# 注册设备：已注册时通过标记文件跳过。",
+                    "if [ ! -f \"$INSTALL_DIR/.server_registered\" ]; then",
+                    "    register_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\"}\"",
+                    "    if post_json \"$DEVICE_SERVER_BASE/device/register\" \"$register_body\" >/dev/null; then",
+                    "        : > \"$INSTALL_DIR/.server_registered\"",
+                    "    fi",
+                    "fi",
+                    "",
+                ]
+            if heartbeat_var.get():
+                blocks += [
+                    "# 心跳：每次定时执行时请求，返回结果保存在 heartbeat_response。",
+                    "heartbeat_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\"}\"",
+                    "heartbeat_response=$(post_json \"$DEVICE_SERVER_BASE/device/heartbeat\" \"$heartbeat_body\")",
+                    "",
+                ]
+            if self_destruct_var.get():
+                blocks += [
+                    "# 危险：只有服务器返回明确的 self_destruct 命令时才删除本服务。",
+                    "case \"$heartbeat_response\" in",
+                    "    *\\\"type\\\"*[[:space:]]*\\\"self_destruct\\\"*)",
+                    "        ( sleep 1; rm -f \"$SERVICE_SCRIPT\"; rm -rf \"$INSTALL_DIR\"; rm -f \"$STATE\" ) >/dev/null 2>&1 &",
+                    "        exit 0",
+                    "        ;;",
+                    "esac",
+                    "",
+                ]
+            if upload_var.get():
+                blocks += [
+                    "# 上传接口：只定义函数，不会自动上传。需要时手动调用 upload_json。",
+                    "upload_json() {",
+                    "    upload_body=$1",
+                    "    post_json \"$DEVICE_SERVER_BASE/device/upload\" \"$upload_body\"",
+                    "}",
+                    "# 示例（默认注释，不会执行）：",
+                    "# upload_json '{\"device_id\":\"'\"$DEVICE_ID\"'\",\"type\":\"example\",\"data\":{}}'",
+                    "",
+                ]
+            blocks.append("# ===== end server integration template =====")
+            addition = "\\n".join(blocks)
+            current = self.schedule_body_text.get("1.0", "end-1c").rstrip()
+            self.schedule_body_text.configure(state="normal")
+            self.schedule_body_text.delete("1.0", tk.END)
+            self.schedule_body_text.insert("1.0", (current + "\\n" + addition).lstrip())
+            self.set_status("已追加服务器接口模板，请放大检查并保存归档")
+            dialog.destroy()
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="right", padx=(6, 0))
+        ttk.Button(buttons, text="追加到编辑框", command=insert_template).pack(side="right")
     def show_global_settings(self) -> None:
         dialog = tk.Toplevel(self)
         dialog.title("全局设置")
