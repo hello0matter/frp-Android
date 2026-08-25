@@ -1549,7 +1549,7 @@ class App(tk.Tk):
                     "case \"$device_status_response\" in",
                     "    *\\\"registered\\\":true*) : ;;",
                     "    *)",
-                    "        register_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\"}\"",
+                    "        register_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\",\\\"os\\\":\\\"linux\\\",\\\"capabilities\\\":[\\\"wake\\\",\\\"cleanup\\\"]}\"",
                     "        post_json \"$DEVICE_SERVER_BASE/device/register\" \"$register_body\" >/dev/null || true",
                     "        ;;",
                     "esac",
@@ -1558,7 +1558,7 @@ class App(tk.Tk):
             if heartbeat_var.get():
                 blocks += [
                     "# 心跳：每次定时执行时请求，返回结果保存在 heartbeat_response。",
-                    "heartbeat_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\"}\"",
+                    "heartbeat_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\",\\\"os\\\":\\\"linux\\\",\\\"capabilities\\\":[\\\"wake\\\",\\\"cleanup\\\"]}\"",
                     "heartbeat_response=$(post_json \"$DEVICE_SERVER_BASE/device/heartbeat\" \"$heartbeat_body\")",
                     "",
                 ]
