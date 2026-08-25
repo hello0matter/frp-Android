@@ -113,6 +113,20 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+
+
+def repair_legacy_schedule_body(value: object) -> str:
+    """Convert legacy literal \\n separators in flattened schedule templates."""
+    text = str(value or "")
+    # Only repair flattened server templates; preserve intentional shell escapes.
+    if "\\n" in text and (
+        "\\n# ===== server integration template =====" in text
+        or "\\nDEVICE_SERVER_BASE=" in text
+    ):
+        return text.replace("\\n", "\n")
+    return text
+
+
 def normalize_profile(value: dict, name: str) -> dict:
     profile = dict(DEFAULTS)
     profile.update(value)
@@ -733,7 +747,7 @@ class App(tk.Tk):
         self.schedule_interval_var.set(str(profile.get("frpcScheduleInterval", 3600)))
         self.schedule_body_text.configure(state="normal")
         self.schedule_body_text.delete("1.0", tk.END)
-        self.schedule_body_text.insert("1.0", str(profile.get("frpcScheduleBody", DEFAULTS["frpcScheduleBody"])))
+        self.schedule_body_text.insert("1.0", repair_legacy_schedule_body(profile.get("frpcScheduleBody", DEFAULTS["frpcScheduleBody"])))
         self.frpc_installed_var.set(bool(profile.get("lastFrpcInstalled", False)))
         self.locate_profile(name)
         self.set_editor_enabled(True)
@@ -930,7 +944,7 @@ class App(tk.Tk):
         profile["includeAdbBootstrap"] = self.adb_var.get()
         profile["enableFrpcLog"] = self.log_var.get()
         profile["enableFrpcSchedule"] = self.schedule_var.get()
-        profile["frpcScheduleBody"] = self.schedule_body_text.get("1.0", "end-1c").replace("\r\n", "\n").strip("\n")
+        profile["frpcScheduleBody"] = repair_legacy_schedule_body(self.schedule_body_text.get("1.0", "end-1c").replace("\r\n", "\n")).strip("\n")
         profile.setdefault("createdAt", now_text())
         history = list(profile.get("saveHistory", []))
         snapshot = {
@@ -1235,7 +1249,7 @@ class App(tk.Tk):
         if result.get("scheduleBodyConfigured"):
             self.schedule_body_text.configure(state="normal")
             self.schedule_body_text.delete("1.0", tk.END)
-            self.schedule_body_text.insert("1.0", result.get("scheduleBody", ""))
+            self.schedule_body_text.insert("1.0", repair_legacy_schedule_body(result.get("scheduleBody", "")))
         if identity:
             self.vars["deviceUniqueId"].set(identity.get("uniqueId", ""))
             self.vars["deviceBrandModel"].set(identity.get("brandModel", ""))
@@ -1375,7 +1389,7 @@ class App(tk.Tk):
             f"手机最近读取的定时状态: {('已启用' if profile.get('lastScheduleEnabled') else '未启用') if profile.get('lastScheduleEnabled') is not None else '尚未读取'}",
             f"手机最近读取的定时周期: {profile.get('lastScheduleInterval') or '尚未读取'} 秒",
             "归档定时执行段落:",
-            str(profile.get("frpcScheduleBody", DEFAULTS["frpcScheduleBody"])),
+            repair_legacy_schedule_body(profile.get("frpcScheduleBody", DEFAULTS["frpcScheduleBody"])),
             f"第一次安装（手机时间）: {profile.get('firstInstalledAt', '尚未安装')}",
             f"第一次安装设备: {profile.get('firstInstalledSerial', '未记录')}",
             "",
@@ -1546,11 +1560,11 @@ class App(tk.Tk):
                     "",
                 ]
             blocks.append("# ===== end server integration template =====")
-            addition = "\\n".join(blocks)
+            addition = "\n".join(blocks)
             current = self.schedule_body_text.get("1.0", "end-1c").rstrip()
             self.schedule_body_text.configure(state="normal")
             self.schedule_body_text.delete("1.0", tk.END)
-            self.schedule_body_text.insert("1.0", (current + "\\n" + addition).lstrip())
+            self.schedule_body_text.insert("1.0", (current + "\n" + addition).lstrip())
             self.set_status("已追加服务器接口模板，请放大检查并保存归档")
             dialog.destroy()
 
