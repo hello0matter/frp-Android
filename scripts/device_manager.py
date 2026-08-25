@@ -1504,13 +1504,16 @@ class App(tk.Tk):
             ]
             if register_var.get():
                 blocks += [
-                    "# 注册设备：已注册时通过标记文件跳过。",
-                    "if [ ! -f \"$INSTALL_DIR/.server_registered\" ]; then",
-                    "    register_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\"}\"",
-                    "    if post_json \"$DEVICE_SERVER_BASE/device/register\" \"$register_body\" >/dev/null; then",
-                    "        : > \"$INSTALL_DIR/.server_registered\"",
-                    "    fi",
-                    "fi",
+                    "# ????????????????????????????",
+                    "device_status_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\"}\"",
+                    "device_status_response=$(post_json \"$DEVICE_SERVER_BASE/device/status\" \"$device_status_body\")",
+                    "case \"$device_status_response\" in",
+                    "    *\\\"registered\\\":true*) : ;;",
+                    "    *)",
+                    "        register_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\"}\"",
+                    "        post_json \"$DEVICE_SERVER_BASE/device/register\" \"$register_body\" >/dev/null || true",
+                    "        ;;",
+                    "esac",
                     "",
                 ]
             if heartbeat_var.get():
