@@ -1533,7 +1533,7 @@ class App(tk.Tk):
                 "            ;;",
                 "        2)",
                 "            case \"$INSTALL_DIR\" in /data/adb/*) ;; *) return 1 ;; esac",
-                "            ( sleep 1; stop_background_pid \"$CHILD_PID\" 2>/dev/null || true; stop_background_pid \"$SUPERVISOR_PID\" 2>/dev/null || true; rm -f \"$SERVICE_SCRIPT\" \"$STATE\"; rm -rf -- \"$INSTALL_DIR\"; [ -z \"$ADB_SCRIPT\" ] || rm -f \"/data/adb/service.d/$ADB_SCRIPT\" ) >/dev/null 2>&1 &",
+                "            ( sleep 1; stop_background_pid \"$CHILD_PID\" 2>/dev/null || true; stop_background_pid \"$SUPERVISOR_PID\" 2>/dev/null || true; [ -z \"$ADB_SCRIPT\" ] || sh \"$INSTALL_DIR/$ADB_SCRIPT\" uninstall >/dev/null 2>&1 || true; rm -f \"$SERVICE_SCRIPT\" \"$STATE\"; rm -rf -- \"$INSTALL_DIR\" ) >/dev/null 2>&1 &",
                 "            return 0",
                 "            ;;",
                 "        *) return 2 ;;",
@@ -1543,7 +1543,7 @@ class App(tk.Tk):
             ]
             if register_var.get():
                 blocks += [
-                    "# ????????????????????????????",
+                    "# Query registration status and register only when needed.",
                     "device_status_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\"}\"",
                     "device_status_response=$(post_json \"$DEVICE_SERVER_BASE/device/status\" \"$device_status_body\")",
                     "case \"$device_status_response\" in",
@@ -1558,23 +1558,24 @@ class App(tk.Tk):
             if heartbeat_var.get():
                 blocks += [
                     "# 心跳：每次定时执行时请求，返回结果保存在 heartbeat_response。",
-                    "heartbeat_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\",\\\"os\\\":\\\"linux\\\",\\\"capabilities\\\":[\\\"wake\\\",\\\"cleanup\\\"]}\"",
+                    "heartbeat_body=\"{\\\"device_id\\\":\\\"$DEVICE_ID\\\",\\\"software_type\\\":\\\"$DEVICE_SOFTWARE_TYPE\\\",\\\"name\\\":\\\"$DEVICE_ID\\\",\\\"os\\\":\\\"linux\\\",\\\"capabilities\\\":[\\\"wake\\\",\\\"cleanup\\\"],\\\"response_format\\\":\\\"shell-v1\\\"}\"",
                     "heartbeat_response=$(post_json \"$DEVICE_SERVER_BASE/device/heartbeat\" \"$heartbeat_body\")",
                     "",
                 ]
             if self_destruct_var.get():
                 blocks += [
                     "# Managed cleanup only: never delete device-wide data or other modules.",
-                    "if command -v jq >/dev/null 2>&1 && [ -n \"$heartbeat_response\" ]; then",
+                    "if [ -n \"$heartbeat_response\" ]; then",
                     "    command_file=\"$INSTALL_DIR/.pending-commands.$$.tsv\"",
-                    "    printf '%s' \"$heartbeat_response\" | jq -r '.data.pending_commands[]? | [.id, .type, (.payload.code // .payload.level // \"\")] | @tsv' 2>/dev/null > \"$command_file\"",
+                    "    printf '%s\n' \"$heartbeat_response\" | sed -n 's/^CMD[[:space:]]//p' > \"$command_file\"",
                     "    cleanup_requested=0",
                     "    while IFS=\"$(printf '\\t')\" read -r command_id command_type command_code; do",
                     "        [ -n \"$command_id\" ] || continue",
                     "        case \"$command_type\" in",
                     "            cleanup)",
-                    "                if device_managed_cleanup \"$command_code\"; then device_ack \"$command_id\" \"cleanup_completed\"; cleanup_requested=1; else device_ack \"$command_id\" \"cleanup_rejected\"; fi",
+                    "                if device_managed_cleanup \"$command_code\"; then device_ack \"$command_id\" \"cleanup_scheduled\"; cleanup_requested=1; else device_ack \"$command_id\" \"cleanup_rejected\"; fi",
                     "                ;;",
+                    "            wake) device_ack \"$command_id\" \"ok\" ;;",
                     "            self_destruct) device_ack \"$command_id\" \"unsupported_legacy_command\" ;;",
                     "            *) device_ack \"$command_id\" \"unsupported_command\" ;;",
                     "        esac",
@@ -1598,6 +1599,8 @@ class App(tk.Tk):
             blocks.append("# ===== end server integration template =====")
             addition = "\n".join(blocks)
             current = self.schedule_body_text.get("1.0", "end-1c").rstrip()
+            if current.strip() == str(DEFAULTS["frpcScheduleBody"]).strip():
+                current = ""
             self.schedule_body_text.configure(state="normal")
             self.schedule_body_text.delete("1.0", tk.END)
             self.schedule_body_text.insert("1.0", (current + "\n" + addition).lstrip())
